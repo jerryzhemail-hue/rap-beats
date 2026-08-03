@@ -1,0 +1,110 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import HomeView from '@/views/HomeView.vue'
+import BeatsView from '@/views/BeatsView.vue'
+import BeatDetailView from '@/views/BeatDetailView.vue'
+import LoginView from '@/views/LoginView.vue'
+import RegisterView from '@/views/RegisterView.vue'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    { path: '/', component: HomeView, meta: { public: true } },
+    { path: '/login', component: LoginView, meta: { guest: true } },
+    { path: '/register', component: RegisterView, meta: { guest: true } },
+    { path: '/beats', component: BeatsView, meta: { requiresAuth: true } },
+    { path: '/beats/:id', component: BeatDetailView, meta: { requiresAuth: true } },
+    { path: '/rapper/:id', component: () => import('../views/RapperDetailView.vue') },
+    {
+      path: '/upload',
+      name: 'Upload',
+      component: () => import('../views/UploadView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
+    {
+      path: '/profile',
+      name: 'Profile',
+      component: () => import('../views/ProfileView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/vip',
+      name: 'Vip',
+      component: () => import('../views/VipView.vue'),
+      meta: { public: true }
+    },
+    {
+      path: '/payment/success',
+      name: 'PaymentSuccess',
+      component: () => import('../views/payment/SuccessView.vue'),
+      meta: { public: true }
+    },
+    {
+      path: '/payment/cancel',
+      name: 'PaymentCancel',
+      component: () => import('../views/payment/CancelView.vue'),
+      meta: { public: true }
+    },
+    {
+      path: '/admin',
+      component: () => import('../components/AdminLayout.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+      children: [
+        { path: '', name: 'AdminDashboard', component: () => import('../views/admin/DashboardView.vue') },
+        { path: 'hot-data', name: 'AdminHotData', component: () => import('../views/admin/HotDataView.vue') },
+        { path: 'users', name: 'AdminUsers', component: () => import('../views/admin/UsersView.vue') },
+        { path: 'beats', name: 'AdminBeats', component: () => import('../views/admin/BeatsView.vue') },
+        { path: 'rappers', name: 'AdminRappers', component: () => import('../views/admin/RappersView.vue') },
+        { path: 'banners', name: 'AdminBanners', component: () => import('../views/admin/BannersView.vue') },
+        { path: 'forum', name: 'AdminForum', component: () => import('../views/admin/ForumManageView.vue') },
+        { path: 'feedback', name: 'AdminFeedback', component: () => import('../views/admin/FeedbackView.vue') },
+        { path: 'license', name: 'AdminLicense', component: () => import('../views/admin/LicenseView.vue') }
+      ]
+    },
+    {
+      path: '/forum',
+      name: 'Forum',
+      component: () => import('../views/ForumView.vue'),
+      meta: { public: true }
+    },
+    {
+      path: '/forum/post/:id',
+      name: 'ForumPost',
+      component: () => import('../views/ForumPostView.vue'),
+      meta: { public: true }
+    },
+    {
+      path: '/forum/new',
+      name: 'ForumNew',
+      component: () => import('../views/ForumNewView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/points',
+      name: 'Points',
+      component: () => import('../views/PointsCenterView.vue'),
+      meta: { requiresAuth: true }
+    }
+  ],
+  scrollBehavior() {
+    return { top: 0 }
+  }
+})
+
+router.beforeEach((to) => {
+  const authStore = useAuthStore()
+
+  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+    return { path: '/login', query: { redirect: to.fullPath, requireAuth: '1' } }
+  }
+
+  if (to.meta.requiresAdmin && !authStore.isAdmin) {
+    return { path: '/' }
+  }
+
+  if (to.meta.guest && authStore.isAuthenticated) {
+    return { path: '/' }
+  }
+})
+
+export default router

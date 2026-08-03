@@ -1,0 +1,46 @@
+# ============================================================
+# 阶段一：构建 TypeScript
+# ============================================================
+FROM node:20-alpine AS server-builder
+
+WORKDIR /app
+
+# 安装依赖（只编译，不需要 sharp / tesseract 的额外依赖）
+COPY server/package.json server/package-lock.json* ./
+RUN npm ci --omit=dev
+
+# 复制源码并编译
+COPY server/tsconfig.json ./
+COPY server/src ./src
+RUN npm run build
+
+# ============================================================
+# 阶段二：运行时镜像
+# ============================================================
+FROM node:20-alpine AS server
+
+WORKDIR /app
+
+# 使用非 root 用户提升安全性
+RUN addgroup -g 1001 -S nodejs && adduser -S nodeapp -u 1001
+
+# 复制编译产物
+COPY --from=server-builder /app/dist ./dist
+COPY --from=server-builder /app/node_modules ./node_modules
+
+# 复制 package.json（用于判断 start 脚本）
+COPY --from=server-builder /app/package.json ./package.json
+
+# 创建上传目录
+RUN mkdir -p /app/uploads/audio /app/uploads/covers /app/uploads/avatars
+
+# 切换到非 root 用户
+USER nodeapp
+
+EXPOSE 3000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+
+CMD ["node", "dist/index.js"]

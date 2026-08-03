@@ -1,0 +1,227 @@
+/* ============================================
+   Theme Variables - Multiple Theme Support
+   ============================================ */
+
+/* Dark Theme (Default) */
+:root,
+[data-theme="dark"] {
+  --bg-primary: #121212;
+  --bg-secondary: #1e1e2e;
+  --bg-card: #252540;
+  --text-primary: #ffffff;
+  --text-secondary: #a0a0b0;
+  --accent: #7c3aed;
+  --accent-hover: #9333ea;
+  --accent-light: rgba(124, 58, 237, 0.1);
+  --border: #2a2a3e;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: rgba(0, 0, 0, 0.3);
+  --overlay: rgba(0, 0, 0, 0.5);
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+}
+
+/* Purple Glow Theme */
+[data-theme="purple"] {
+  --bg-primary: #0f0a1e;
+  --bg-secondary: #1a1033;
+  --bg-card: #251946;
+  --text-primary: #f0e6ff;
+  --text-secondary: #b8a8d9;
+  --accent: #a855f7;
+  --accent-hover: #c084fc;
+  --accent-light: rgba(168, 85, 247, 0.15);
+  --border: #3d2a66;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: rgba(168, 85, 247, 0.2);
+  --overlay: rgba(15, 10, 30, 0.7);
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --error: #f87171;
+}
+
+/* Ocean Blue Theme */
+[data-theme="ocean"] {
+  --bg-primary: #0c1929;
+  --bg-secondary: #132337;
+  --bg-card: #1a3049;
+  --text-primary: #e0f2fe;
+  --text-secondary: #7dd3fc;
+  --accent: #0ea5e9;
+  --accent-hover: #38bdf8;
+  --accent-light: rgba(14, 165, 233, 0.15);
+  --border: #1e4976;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: rgba(14, 165, 233, 0.2);
+  --overlay: rgba(12, 25, 41, 0.7);
+  --success: #34d399;
+  --warning: #fbbf24;
+  --error: #f87171;
+}
+
+/* Sunset Theme */
+[data-theme="sunset"] {
+  --bg-primary: #1a0f0a;
+  --bg-secondary: #2d1810;
+  --bg-card: #3d2318;
+  --text-primary: #fef3e2;
+  --text-secondary: #d4a574;
+  --accent: #f97316;
+  --accent-hover: #fb923c;
+  --accent-light: rgba(249, 115, 22, 0.15);
+  --border: #5c3a28;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: rgba(249, 115, 22, 0.2);
+  --overlay: rgba(26, 15, 10, 0.7);
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --error: #f87171;
+}
+
+/* Neon Theme */
+[data-theme="neon"] {
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #12121a;
+  --bg-card: #1a1a26;
+  --text-primary: #e0e0ff;
+  --text-secondary: #8888aa;
+  --accent: #00ff88;
+  --accent-hover: #00ffaa;
+  --accent-light: rgba(0, 255, 136, 0.1);
+  --border: #2a2a3e;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: rgba(0, 255, 136, 0.3);
+  --overlay: rgba(10, 10, 15, 0.8);
+  --success: #00ff88;
+  --warning: #ffdd00;
+  --error: #ff4466;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+}
+
+input, select {
+  font-family: inherit;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Utility classes */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* Button base */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 24px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+.btn-outline:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Skeleton loading */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-card) 25%, var(--border) 50%, var(--bg-card) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s infinite;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes skeleton-loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Transitions */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}

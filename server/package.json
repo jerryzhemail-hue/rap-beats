@@ -1,0 +1,39 @@
+{
+  "name": "rap-beats-server",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "create-admin": "tsx src/scripts/create-admin.ts",
+    "migrate-local-assets-to-oss": "tsx src/scripts/migrate-local-assets-to-oss.ts",
+    "migrate-sqlite-to-mysql": "tsx src/scripts/migrate-sqlite-to-mysql.ts",
+    "sanitize-forum": "tsx src/scripts/sanitize-forum-data.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "ali-oss": "^6.23.0",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.10.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.1.1",
+    "music-metadata": "^11.14.0",
+    "mysql2": "^3.15.1",
+    "sharp": "^0.35.3",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/ali-oss": "^6.23.3",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.1.0",
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  }
+}

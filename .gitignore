@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+*.local
+
+# Environment variables (contains secrets)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Database (contains user data)
+server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+Thumbs.db
+
+# Debug logs
+.dbg/
