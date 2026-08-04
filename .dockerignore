@@ -26,11 +26,11 @@
 # ============================================================
 # 服务器端
 # ============================================================
-server/src/scripts
 server/src/**/*.test.ts
 server/src/**/*.spec.ts
 server/.env
 !server/.env.example
+server/src/scripts
 server/data
 server/logs
 

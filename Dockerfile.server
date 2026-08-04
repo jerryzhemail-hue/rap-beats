@@ -24,7 +24,7 @@ FROM node:20-alpine AS server
 
 WORKDIR /app
 
-# 音频处理：本地存储模式游客试听截断依赖 ffmpeg
+# 音频处理：游客试听截断（ffmpeg）+ BPM 检测（ffmpeg 解码，JS 算法）
 RUN apk add --no-cache ffmpeg
 
 # 使用非 root 用户提升安全性
@@ -33,8 +33,6 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nodeapp -u 1001
 # 复制编译产物
 COPY --from=server-builder /app/dist ./dist
 COPY --from=server-builder /app/node_modules ./node_modules
-
-# 复制 package.json（用于判断 start 脚本）
 COPY --from=server-builder /app/package.json ./package.json
 
 # 创建上传目录和数据目录（app 用户可写）
