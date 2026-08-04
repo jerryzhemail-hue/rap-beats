@@ -4,12 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      skip_mysql_init:
-        description: '跳过 MySQL 初始化（仅重启服务）'
-        required: false
-        default: 'false'
-        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -96,102 +90,11 @@ jobs:
     name: Deploy to Server
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
     environment: production
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Download docker-compose.prod.yml
-        run: |
-          cat > docker-compose.prod.yml << 'EOF'
-          version: '3.9'
-
-          services:
-            mysql:
-              image: mysql:8.0
-              container_name: rap-beats-mysql
-              restart: unless-stopped
-              environment:
-                MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-                MYSQL_DATABASE: ${DB_NAME:-rap_beats}
-                MYSQL_CHARSET: utf8mb4
-                MYSQL_COLLATION: utf8mb4_unicode_ci
-                TZ: Asia/Shanghai
-              ports:
-                - "3306:3306"
-              volumes:
-                - mysql_data:/var/lib/mysql
-              networks:
-                - rap-beats-net
-              healthcheck:
-                test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-                interval: 10s
-                timeout: 5s
-                retries: 5
-                start_period: 30s
-
-            server:
-              image: ghcr.io/${{ github.repository_owner }}/rap-beats-server:${{ github.sha }}
-              container_name: rap-beats-server
-              restart: unless-stopped
-              ports:
-                - "3000:3000"
-              environment:
-                DB_DRIVER: mysql
-                DB_HOST: mysql
-                DB_PORT: 3306
-                DB_USER: root
-                DB_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-                DB_NAME: ${DB_NAME:-rap_beats}
-                FORUM_DB_NAME: ${FORUM_DB_NAME:-rap_beats_forum}
-                JWT_SECRET: ${JWT_SECRET}
-                XUNHU_APPID: ${XUNHU_APPID}
-                XUNHU_APPSECRET: ${XUNHU_APPSECRET}
-                XUNHU_GATEWAY: ${XUNHU_GATEWAY:-https://api.xunhupay.com/payment/do.html}
-                BASE_URL: ${BASE_URL}
-                CLIENT_URL: ${CLIENT_URL}
-                STORAGE_DRIVER: ${STORAGE_DRIVER:-oss}
-                OSS_REGION: ${OSS_REGION}
-                OSS_BUCKET: ${OSS_BUCKET}
-                OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID}
-                OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET}
-                OSS_ENDPOINT: ${OSS_ENDPOINT}
-                OSS_PUBLIC_BASE_URL: ${OSS_PUBLIC_BASE_URL}
-                OSS_AUDIO_PREFIX: ${OSS_AUDIO_PREFIX:-audio}
-                OSS_COVER_PREFIX: ${OSS_COVER_PREFIX:-covers}
-                OSS_AVATAR_PREFIX: ${OSS_AVATAR_PREFIX:-avatars}
-              depends_on:
-                mysql:
-                  condition: service_healthy
-              networks:
-                - rap-beats-net
-              healthcheck:
-                test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
-                interval: 30s
-                timeout: 10s
-                retries: 3
-                start_period: 15s
-
-            client:
-              image: ghcr.io/${{ github.repository_owner }}/rap-beats-client:${{ github.sha }}
-              container_name: rap-beats-client
-              restart: unless-stopped
-              ports:
-                - "80:80"
-              depends_on:
-                - server
-              networks:
-                - rap-beats-net
-
-          networks:
-            rap-beats-net:
-              driver: bridge
-
-          volumes:
-            mysql_data:
-          EOF
 
       - name: Set up SSH key
         uses: webfactory/ssh-agent@v0.9.0
@@ -204,43 +107,56 @@ jobs:
           ssh-keyscan -H ${{ vars.SERVER_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
           echo "Host known: ${{ vars.SERVER_HOST }}"
 
+      - name: Backup database before deploy
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }} '
+            set -e
+            mkdir -p ${{ vars.SERVER_DEPLOY_DIR }}/backups
+            if docker ps --format "{{.Names}}" | grep -q "^rap-beats-mysql$"; then
+              set -a
+              . ${{ vars.SERVER_DEPLOY_DIR }}/.env 2>/dev/null || true
+              set +a
+              docker exec rap-beats-mysql sh -c "exec mysqldump -uroot -p\"\$MYSQL_ROOT_PASSWORD\" --single-transaction --databases ${{ vars.DB_NAME }} ${{ vars.FORUM_DB_NAME }}" > ${{ vars.SERVER_DEPLOY_DIR }}/backups/predeploy-$(date +%F-%H%M%S).sql 2>/dev/null \
+                && echo "数据库备份完成" \
+                || echo "数据库备份失败（继续部署，请手动检查）"
+            else
+              echo "MySQL 容器未运行，跳过备份"
+            fi
+          '
+
       - name: Copy deployment files to server
         run: |
-          echo "同步以下文件到服务器..."
-          rsync -az --delete \
+          rsync -az \
             --include='docker-compose.prod.yml' \
             --include='nginx.client.conf' \
             --include='Dockerfile.client' \
             --include='Dockerfile.server' \
+            --exclude='._*' \
+            --exclude='.git' \
             --exclude='*' \
             -e "ssh -o StrictHostKeyChecking=no" \
-            . ${{ secrets.SERVER_USER }}@${{ vars.SERVER_HOST }}:${{ vars.SERVER_DEPLOY_DIR }}
+            . ${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }}:${{ vars.SERVER_DEPLOY_DIR }}
 
-      - name: Build client image on server
+      - name: Pull images and restart containers
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ vars.SERVER_HOST }} "
+          ssh -o StrictHostKeyChecking=no ${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }} "
             set -e
             cd ${{ vars.SERVER_DEPLOY_DIR }}
 
             # 登录 ghcr.io（使用 GitHub Token）
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            # 拉取新镜像
-            echo '拉取 server 镜像...'
+            # 拉取本次构建的镜像（按 commit SHA 固定版本）
             docker pull ghcr.io/${{ github.repository_owner }}/rap-beats-server:${{ github.sha }}
-
-            echo '拉取 client 镜像...'
             docker pull ghcr.io/${{ github.repository_owner }}/rap-beats-client:${{ github.sha }}
 
-            # 重新 tag 为 latest
-            docker tag ghcr.io/${{ github.repository_owner }}/rap-beats-server:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/rap-beats-server:latest
-            docker tag ghcr.io/${{ github.repository_owner }}/rap-beats-client:${{ github.sha }} ghcr.io/${{ github.repository_owner }}/rap-beats-client:latest
-
-            # 停止旧容器（保留数据卷）
+            # 停止旧容器（数据卷保留）
             docker compose -f docker-compose.prod.yml down --remove-orphans || true
 
-            # 启动新容器
-            IMAGE_TAG_SHA=${{ github.sha }} docker compose -f docker-compose.prod.yml up -d
+            # 启动新容器（compose 自动读取同目录 .env 中的配置变量）
+            SERVER_IMAGE=ghcr.io/${{ github.repository_owner }}/rap-beats-server:${{ github.sha }} \
+            CLIENT_IMAGE=ghcr.io/${{ github.repository_owner }}/rap-beats-client:${{ github.sha }} \
+            docker compose -f docker-compose.prod.yml up -d
 
             echo '等待服务启动...'
             sleep 10
@@ -262,8 +178,7 @@ jobs:
       - name: Cleanup old images on server
         if: always()
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ vars.SERVER_HOST }} "
-            # 清理超过 5 天的旧镜像节省空间
+          ssh -o StrictHostKeyChecking=no ${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }} "
             docker image prune -af --filter 'until=120h' || true
             echo '镜像清理完成'
           "
