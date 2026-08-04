@@ -5,9 +5,12 @@ FROM node:20-alpine AS server-builder
 
 WORKDIR /app
 
-# 安装依赖（只编译，不需要 sharp / tesseract 的额外依赖）
+# 安装 Python 和编译工具（better-sqlite3 需要编译）
+RUN apk add --no-cache python3 make g++
+
+# 安装依赖（包括 devDependencies，用于构建）
 COPY server/package.json server/package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 # 复制源码并编译
 COPY server/tsconfig.json ./
@@ -31,8 +34,11 @@ COPY --from=server-builder /app/node_modules ./node_modules
 # 复制 package.json（用于判断 start 脚本）
 COPY --from=server-builder /app/package.json ./package.json
 
-# 创建上传目录
-RUN mkdir -p /app/uploads/audio /app/uploads/covers /app/uploads/avatars
+# 创建上传目录和数据目录（app 用户可写）
+RUN mkdir -p /app/uploads/audio /app/uploads/covers /app/uploads/avatars \
+             /app/data/audio /app/data/covers /app/data/avatars /app/data/banners \
+             /app/data/forum-images /app/data/forum-audio /app/data/forum \
+    && chown -R nodeapp:nodejs /app/uploads /app/data
 
 # 切换到非 root 用户
 USER nodeapp
