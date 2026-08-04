@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { requireAdmin, AuthRequest } from '../middleware/auth.js';
 import { getDatabaseClient, getForumDatabaseClient } from '../database/client.js';
 import { deleteStoredAsset } from '../services/storage.js';
@@ -9,6 +10,9 @@ import { isRemoteStorageEnabled } from '../services/storage.js';
 import { toDateTimeString } from '../utils/timezone.js';
 
 const router = Router();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // GET /api/admin/stats — 数据看板统计
 router.get('/admin/stats', requireAdmin, async (_req: AuthRequest, res) => {

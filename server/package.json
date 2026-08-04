@@ -1,6 +1,7 @@
 {
   "name": "rap-beats-server",
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "create-admin": "tsx src/scripts/create-admin.ts",

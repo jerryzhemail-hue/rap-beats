@@ -2,11 +2,14 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { fileURLToPath } from 'url';
 import { promisify } from 'util';
 
 const unlinkAsync = promisify(fs.unlink);
 const writeFileAsync = promisify(fs.writeFile);
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const BPM_SCRIPT_PATH = path.resolve(__dirname, '../../src/scripts/detect_bpm.py');
 
 export interface BpmDetectionResult {
