@@ -679,7 +679,12 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
     return;
   }
 
-  res.setHeader('Content-Disposition', `attachment; filename="${getDownloadFileName(beat)}"`);
+  // 中文文件名需要 RFC 5987 编码，否则 HTTP 头非法导致 500
+  const downloadName = getDownloadFileName(beat);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="beat-${beat.id}${path.extname(downloadName)}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`
+  );
   res.setHeader('Content-Type', 'audio/mpeg');
   fs.createReadStream(filePath).pipe(res);
 });

@@ -99,6 +99,20 @@ async function startServer() {
   app.use('/api', forumRouter);
   app.use('/api', feedbackRouter);
 
+  // Multer 文件校验错误 → 400（必须注册在 500 兜底之前）
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: '文件大小超过限制（最大50MB）' });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+
   // 全局错误兜底：所有未捕获的 5xx 错误统一返回通用信息，不暴露内部细节
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error('[Server Error]', err?.message ?? err);
@@ -109,20 +123,6 @@ async function startServer() {
     console.log(`Rap Beats Server running on http://localhost:${PORT}`);
   });
 }
-
-// Multer error handling
-app.use((err: any, _req: any, res: any, next: any) => {
-  if (err instanceof multer.MulterError) {
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ error: '文件大小超过限制（最大50MB）' });
-    }
-    return res.status(400).json({ error: err.message });
-  }
-  if (err) {
-    return res.status(400).json({ error: err.message });
-  }
-  next();
-});
 
 startServer().catch((error) => {
   console.error(error);

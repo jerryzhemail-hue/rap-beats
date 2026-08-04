@@ -24,6 +24,9 @@ FROM node:20-alpine AS server
 
 WORKDIR /app
 
+# 音频处理：本地存储模式游客试听截断依赖 ffmpeg
+RUN apk add --no-cache ffmpeg
+
 # 使用非 root 用户提升安全性
 RUN addgroup -g 1001 -S nodejs && adduser -S nodeapp -u 1001
 

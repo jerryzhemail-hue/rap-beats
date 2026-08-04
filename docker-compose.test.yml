@@ -1,0 +1,72 @@
+# ============================================================
+# 本地测试环境（与线上完全隔离）
+# 端口：MySQL 3307 / 后端 3100 / 前端 8080
+# 存储：本地文件（server/data 目录，挂载进容器）
+#
+# 启动：
+#   docker compose -f docker-compose.test.yml up -d mysql
+#   docker exec rap-beats-test-mysql mysql -uroot -ptest_root_2024 -e "CREATE DATABASE IF NOT EXISTS rap_beats_forum CHARACTER SET utf8mb4"
+#   docker compose -f docker-compose.test.yml up -d
+# 停止：docker compose -f docker-compose.test.yml down
+# 清数据：docker compose -f docker-compose.test.yml down -v
+# ============================================================
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: rap-beats-test-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: test_root_2024
+      MYSQL_DATABASE: rap_beats
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+      TZ: Asia/Shanghai
+    ports:
+      - "3307:3306"
+    volumes:
+      - rap-beats-test-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  server:
+    image: rap-beats-server:test
+    container_name: rap-beats-test-server
+    restart: unless-stopped
+    environment:
+      DB_DRIVER: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: test_root_2024
+      DB_NAME: rap_beats
+      FORUM_DB_NAME: rap_beats_forum
+      JWT_SECRET: test-jwt-secret-0123456789abcdef0123456789abcdef
+      STORAGE_DRIVER: local
+      BASE_URL: http://localhost:8080
+      CLIENT_URL: http://localhost:8080
+      XUNHU_APPID: ""
+      XUNHU_APPSECRET: ""
+      MOCK_PAYMENT_ENABLED: "true"
+    ports:
+      - "3100:3000"
+    volumes:
+      - ./server/data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  client:
+    image: rap-beats-client:test
+    container_name: rap-beats-test-client
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - server
+
+volumes:
+  rap-beats-test-mysql-data:
