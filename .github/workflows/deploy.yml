@@ -209,7 +209,7 @@ jobs:
           echo "同步以下文件到服务器..."
           rsync -az --delete \
             --include='docker-compose.prod.yml' \
-            --include='docker/nginx.client.conf' \
+            --include='nginx.client.conf' \
             --include='Dockerfile.client' \
             --include='Dockerfile.server' \
             --exclude='*' \

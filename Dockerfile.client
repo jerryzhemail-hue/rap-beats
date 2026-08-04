@@ -27,7 +27,7 @@ RUN rm /etc/nginx/conf.d/default.conf
 COPY --from=client-builder /app/dist /usr/share/nginx/html
 
 # 复制 Nginx 配置
-COPY docker/nginx.client.conf /etc/nginx/conf.d/default.conf
+COPY nginx.client.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 

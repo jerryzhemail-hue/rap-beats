@@ -44,6 +44,10 @@ Thumbs.db
 # Debug logs
 .dbg/
 
+# SSH deploy keys (never commit)
+.github/deploy_key
+.github/deploy_key.pub
+
 # 生产环境变量（含密钥，严禁提交）
 .env.production
 .env.*.production

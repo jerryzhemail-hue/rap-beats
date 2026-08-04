@@ -543,24 +543,30 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
     console.warn('[forum init] migration for removing general category failed:', migErr);
   }
 
-  // Sync existing categories to desired state (rename/update old ones)
-  try {
-    const syncCategories = [
-      { id: 2, name: '创作', slug: 'creation', icon: '✍️', description: '歌词创作、Freestyle、Flow分享', sort_order: 1 },
-      { id: 7, name: '说唱巅峰对决2026', slug: 'rap-battle-2026', icon: '🎧', description: '说唱巅峰对决2026、比赛、竞演、选手讨论', sort_order: 2 },
-      { id: 8, name: '涂鸦', slug: 'graffiti', icon: '🎨', description: '涂鸦艺术、街头创作分享', sort_order: 3 },
-      { id: 9, name: '说唱 HIT-SONG', slug: 'hit-song', icon: '💃', description: '说唱HIT-SONG、热门单曲、金曲赏析', sort_order: 4 },
-      { id: 10, name: '说唱', slug: 'rap', icon: '🎙️', description: '说唱音乐、rapper故事、说唱文化', sort_order: 5 },
-      { id: 3, name: '免费Beat分享', slug: 'beats', icon: '🎵', description: '免费Beat下载、分享、交流', sort_order: 6 },
-      { id: 5, name: '新人报道', slug: 'newbie', icon: '🌱', description: '新来的朋友来这里报道', sort_order: 7 },
-    ];
-    for (const cat of syncCategories) {
-      await forumDb.execute(
-        'UPDATE forum_categories SET name = ?, slug = ?, icon = ?, description = ?, sort_order = ? WHERE id = ?',
-        [cat.name, cat.slug, cat.icon, cat.description, cat.sort_order, cat.id]
-      );
-    }
-    console.log('[forum init] categories synced');
+    // Sync categories by slug (id may differ between environments)
+    try {
+      const syncCategories = [
+        { name: '创作', slug: 'creation', icon: '✍️', description: '歌词创作、Freestyle、Flow分享', sort_order: 1 },
+        { name: '说唱巅峰对决2026', slug: 'rap-battle-2026', icon: '🎧', description: '说唱巅峰对决2026、比赛、竞演、选手讨论', sort_order: 2 },
+        { name: '涂鸦', slug: 'graffiti', icon: '🎨', description: '涂鸦艺术、街头创作分享', sort_order: 3 },
+        { name: '说唱 HIT-SONG', slug: 'hit-song', icon: '💃', description: '说唱HIT-SONG、热门单曲、金曲赏析', sort_order: 4 },
+        { name: '说唱', slug: 'rap', icon: '🎙️', description: '说唱音乐、rapper故事、说唱文化', sort_order: 5 },
+        { name: '免费Beat分享', slug: 'beats', icon: '🎵', description: '免费Beat下载、分享、交流', sort_order: 6 },
+        { name: '新人报道', slug: 'newbie', icon: '🌱', description: '新来的朋友来这里报道', sort_order: 7 },
+      ];
+      for (const cat of syncCategories) {
+        const existing = await forumDb.queryOne<{ id: number }>(
+          'SELECT id FROM forum_categories WHERE slug = ?',
+          [cat.slug]
+        );
+        if (existing) {
+          await forumDb.execute(
+            'UPDATE forum_categories SET name = ?, icon = ?, description = ?, sort_order = ? WHERE id = ?',
+            [cat.name, cat.icon, cat.description, cat.sort_order, existing.id]
+          );
+        }
+      }
+      console.log('[forum init] categories synced');
   } catch (syncErr) {
     console.warn('[forum init] category sync failed:', syncErr);
   }
@@ -586,17 +592,23 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
   }
 
   // ── Topic migration: sync existing topics to correct state ──
-  // 按 name + category_id 匹配，找出需要 UPDATE/INSERT 的话题
+  // 按 name + category_slug 匹配，找出需要 UPDATE/INSERT 的话题
   try {
     const dbTopics = await forumDb.queryMany<{ id: number; name: string; slug: string; category_id: number }>(
       'SELECT id, name, slug, category_id FROM forum_topics ORDER BY id'
     );
+    // Build category slug map (id → slug)
+    const categorySlugMap = new Map<number, string>();
+    const dbCats = await forumDb.queryMany<{ id: number; slug: string }>(
+      'SELECT id, slug FROM forum_categories'
+    );
+    for (const c of dbCats) categorySlugMap.set(c.id, c.slug);
 
     const updates: Array<{ id: number; name: string; slug: string }> = [];
     for (const t of dbTopics) {
+      const catSlug = categorySlugMap.get(t.category_id) ?? '';
       const name = t.name;
-      const cat = t.category_id;
-      if ((cat === 7) && ['DJ技巧', '混音制作', 'Remix'].includes(name)) {
+      if (catSlug === 'rap-battle-2026' && ['DJ技巧', '混音制作', 'Remix'].includes(name)) {
         const map: Record<string, { name: string; slug: string }> = {
           'DJ技巧': { name: '选手讨论', slug: 'rap-battle' },
           '混音制作': { name: '对决解析', slug: 'battle-analysis' },
@@ -604,7 +616,7 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
         };
         if (map[name]) updates.push({ id: t.id, ...map[name] });
       }
-      if ((cat === 9) && ['街舞Breaking', '舞蹈技巧'].includes(name)) {
+      if (catSlug === 'hit-song' && ['街舞Breaking', '舞蹈技巧'].includes(name)) {
         const map: Record<string, { name: string; slug: string }> = {
           '街舞Breaking': { name: 'HIT-SONG赏析', slug: 'hit-song' },
           '舞蹈技巧': { name: '经典曲目', slug: 'classic-tracks' },
@@ -617,14 +629,18 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
       await forumDb.execute('UPDATE forum_topics SET name = ?, slug = ? WHERE id = ?', [u.name, u.slug, u.id]);
     }
 
-    // 新人报到 (cat 5) 不存在则插入
-    const hasNewbie = dbTopics.find(t => t.category_id === 5 && t.slug === 'newbie');
-    if (!hasNewbie) {
-      await forumDb.execute('INSERT INTO forum_topics (name, slug, category_id) VALUES (?, ?, ?)', ['新人报到', 'newbie', 5]);
+    // 新人报到版块不存在则插入
+    const rapCatId = dbCats.find(c => c.slug === 'rap')?.id;
+    const hasNewbie = dbTopics.find(t => t.category_id === rapCatId && t.slug === 'newbie');
+    if (!hasNewbie && rapCatId) {
+      await forumDb.execute('INSERT INTO forum_topics (name, slug, category_id) VALUES (?, ?, ?)', ['新人报到', 'newbie', rapCatId]);
     }
 
-    // 移除创作版块中的夏日话题（id=6）
-    await forumDb.execute("DELETE FROM forum_topics WHERE slug = 'summer' AND category_id = 2");
+    // 移除创作版块中的夏日话题
+    const creationCatId = dbCats.find(c => c.slug === 'creation')?.id;
+    if (creationCatId) {
+      await forumDb.execute("DELETE FROM forum_topics WHERE slug = 'summer' AND category_id = ?", [creationCatId]);
+    }
 
     if (updates.length > 0 || !hasNewbie) {
       console.log(`[forum init] topics migrated (${updates.length} updated)`);
@@ -636,40 +652,48 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
   // Seed default topics
   const topicRows = await forumDb.queryMany<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM forum_topics');
   if ((topicRows[0]?.cnt ?? 0) === 0) {
+    const catSlugToId = new Map<string, number>();
+    const dbCats = await forumDb.queryMany<{ id: number; slug: string }>(
+      'SELECT id, slug FROM forum_categories'
+    );
+    for (const c of dbCats) catSlugToId.set(c.slug, c.id);
+
     const topics = [
-      // 创作 (cat 2)
-      { name: '说唱技巧', slug: 'technique', category_id: 2 },
-      { name: 'Beat鉴赏', slug: 'beat-review', category_id: 2 },
-      { name: '歌词分享', slug: 'lyrics', category_id: 2 },
-      { name: 'Freestyle', slug: 'freestyle', category_id: 2 },
-      // 说唱巅峰对决2026 (cat 7)
-      { name: '选手讨论', slug: 'rap-battle', category_id: 7 },
-      { name: '对决解析', slug: 'battle-analysis', category_id: 7 },
-      { name: '舞台表现', slug: 'performance', category_id: 7 },
-      // 涂鸦 (cat 8)
-      { name: '涂鸦插画', slug: 'graffiti', category_id: 8 },
-      { name: '街头艺术', slug: 'street-art', category_id: 8 },
-      { name: '插画分享', slug: 'illustration', category_id: 8 },
-      // 说唱 HIT-SONG (cat 9)
-      { name: 'HIT-SONG赏析', slug: 'hit-song', category_id: 9 },
-      { name: '经典曲目', slug: 'classic-tracks', category_id: 9 },
-      // 说唱 (cat 10)
-      { name: '音乐风格', slug: 'genre-talk', category_id: 10 },
-      { name: '中文说唱', slug: 'chinese-rap', category_id: 10 },
-      { name: '情感说唱', slug: 'emotion', category_id: 10 },
-      { name: '歌词分享', slug: 'lyrics', category_id: 10 },
-      { name: 'Beat鉴赏', slug: 'beat-review', category_id: 10 },
-      { name: '说唱技巧', slug: 'technique', category_id: 10 },
-      // 免费Beat分享 (cat 3)
-      { name: 'Beat鉴赏', slug: 'beat-review', category_id: 3 },
-      { name: 'Beat制作', slug: 'beat-production', category_id: 3 },
-      // 新人报道 (cat 5)
-      { name: '新人报到', slug: 'newbie', category_id: 5 },
+      // 创作
+      { name: '说唱技巧', slug: 'technique', catSlug: 'creation' },
+      { name: 'Beat鉴赏', slug: 'beat-review', catSlug: 'creation' },
+      { name: '歌词分享', slug: 'lyrics', catSlug: 'creation' },
+      { name: 'Freestyle', slug: 'freestyle', catSlug: 'creation' },
+      // 说唱巅峰对决2026
+      { name: '选手讨论', slug: 'rap-battle', catSlug: 'rap-battle-2026' },
+      { name: '对决解析', slug: 'battle-analysis', catSlug: 'rap-battle-2026' },
+      { name: '舞台表现', slug: 'performance', catSlug: 'rap-battle-2026' },
+      // 涂鸦
+      { name: '涂鸦插画', slug: 'graffiti', catSlug: 'graffiti' },
+      { name: '街头艺术', slug: 'street-art', catSlug: 'graffiti' },
+      { name: '插画分享', slug: 'illustration', catSlug: 'graffiti' },
+      // 说唱 HIT-SONG
+      { name: 'HIT-SONG赏析', slug: 'hit-song', catSlug: 'hit-song' },
+      { name: '经典曲目', slug: 'classic-tracks', catSlug: 'hit-song' },
+      // 说唱
+      { name: '音乐风格', slug: 'genre-talk', catSlug: 'rap' },
+      { name: '中文说唱', slug: 'chinese-rap', catSlug: 'rap' },
+      { name: '情感说唱', slug: 'emotion', catSlug: 'rap' },
+      { name: '歌词分享', slug: 'lyrics', catSlug: 'rap' },
+      { name: 'Beat鉴赏', slug: 'beat-review', catSlug: 'rap' },
+      { name: '说唱技巧', slug: 'technique', catSlug: 'rap' },
+      // 免费Beat分享
+      { name: 'Beat鉴赏', slug: 'beat-review', catSlug: 'beats' },
+      { name: 'Beat制作', slug: 'beat-production', catSlug: 'beats' },
+      // 新人报道
+      { name: '新人报到', slug: 'newbie', catSlug: 'newbie' },
     ];
     for (const topic of topics) {
+      const catId = catSlugToId.get(topic.catSlug);
+      if (!catId) continue; // skip if category doesn't exist
       await forumDb.execute(
         'INSERT INTO forum_topics (name, slug, category_id) VALUES (?, ?, ?)',
-        [topic.name, topic.slug, topic.category_id]
+        [topic.name, topic.slug, catId]
       );
     }
   }

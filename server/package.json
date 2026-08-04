@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "create-admin": "tsx src/scripts/create-admin.ts",
-    "migrate-local-assets-to-oss": "tsx src/scripts/migrate-local-assets-to-oss.ts",
-    "migrate-sqlite-to-mysql": "tsx src/scripts/migrate-sqlite-to-mysql.ts",
-    "sanitize-forum": "tsx src/scripts/sanitize-forum-data.ts",
+    "dev": "node --import tsx/esm --watch --watch-path=src src/index.ts",
+    "create-admin": "node --import tsx/esm src/scripts/create-admin.ts",
+    "migrate-local-assets-to-oss": "node --import tsx/esm src/scripts/migrate-local-assets-to-oss.ts",
+    "migrate-sqlite-to-mysql": "node --import tsx/esm src/scripts/migrate-sqlite-to-mysql.ts",
+    "sanitize-forum": "node --import tsx/esm src/scripts/sanitize-forum-data.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
