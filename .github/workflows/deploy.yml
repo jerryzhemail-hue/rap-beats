@@ -143,6 +143,10 @@ jobs:
             set -e
             cd ${{ vars.SERVER_DEPLOY_DIR }}
 
+            # 导出镜像变量，供后续所有 docker compose 命令使用（down/up/ps 都会插值）
+            export SERVER_IMAGE=ghcr.io/${{ github.repository_owner }}/rap-beats-server:${{ github.sha }}
+            export CLIENT_IMAGE=ghcr.io/${{ github.repository_owner }}/rap-beats-client:${{ github.sha }}
+
             # 登录 ghcr.io（使用 GitHub Token）
             echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
@@ -154,8 +158,6 @@ jobs:
             docker compose -f docker-compose.prod.yml down --remove-orphans || true
 
             # 启动新容器（compose 自动读取同目录 .env 中的配置变量）
-            SERVER_IMAGE=ghcr.io/${{ github.repository_owner }}/rap-beats-server:${{ github.sha }} \
-            CLIENT_IMAGE=ghcr.io/${{ github.repository_owner }}/rap-beats-client:${{ github.sha }} \
             docker compose -f docker-compose.prod.yml up -d
 
             echo '等待服务启动...'
