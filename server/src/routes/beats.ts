@@ -193,8 +193,8 @@ async function proxyRemoteAudioStream(fetchUrl: string, req: AuthRequest, res: R
   Readable.fromWeb(upstream.body as never).pipe(res);
 }
 
-// GET /api/beats - 需要登录才能访问
-router.get('/beats', requireAuth, async (req: AuthRequest, res: Response) => {
+// GET /api/beats - 公开访问（不需要登录）
+router.get('/beats', optionalAuth, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 12));
@@ -343,7 +343,7 @@ router.get('/beats', requireAuth, async (req: AuthRequest, res: Response) => {
 });
 
 // GET /api/beats/:id
-router.get('/beats/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+router.get('/beats/:id', optionalAuth, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
   const beat = await database.queryOne<BeatRecord>('SELECT * FROM beats WHERE id = ?', [req.params.id]);
   if (!beat) {
@@ -359,11 +359,16 @@ router.get('/beats/:id', requireAuth, async (req: AuthRequest, res: Response) =>
       required_level: 'premium'
     });
   }
-  const favorite = await database.queryOne<{ id: number }>(
-    'SELECT id FROM favorites WHERE user_id = ? AND beat_id = ?',
-    [req.user!.id, req.params.id]
-  );
-  res.json(serializeBeatAssets({ ...beat, is_favorited: !!favorite }));
+  // optionalAuth：游客可能没有 user，只有登录用户才查询收藏状态
+  let isFavorited = false;
+  if (req.user) {
+    const favorite = await database.queryOne<{ id: number }>(
+      'SELECT id FROM favorites WHERE user_id = ? AND beat_id = ?',
+      [req.user.id, req.params.id]
+    );
+    isFavorited = !!favorite;
+  }
+  res.json(serializeBeatAssets({ ...beat, is_favorited: isFavorited }));
 });
 
 // GET /api/beats/:id/stream
@@ -522,7 +527,7 @@ router.get('/beats/:id/stream', optionalAuth, async (req: AuthRequest, res: Resp
 
 // GET /api/beats/:id/download
 // GET /api/beats/:id/license
-router.get('/beats/:id/license', requireAuth, async (req: AuthRequest, res: Response) => {
+router.get('/beats/:id/license', optionalAuth, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
 
   const beat = await database.queryOne<BeatRecord>('SELECT id FROM beats WHERE id = ?', [req.params.id]);
@@ -536,16 +541,20 @@ router.get('/beats/:id/license', requireAuth, async (req: AuthRequest, res: Resp
     'SELECT content, version FROM beat_license_templates WHERE is_active = 1 ORDER BY id DESC LIMIT 1'
   );
 
-  // 查询用户是否已同意
-  const agreement = await database.queryOne<{ id: number }>(
-    'SELECT id FROM beat_license_agreements WHERE user_id = ? AND beat_id = ? LIMIT 1',
-    [req.user!.id, beat.id]
-  );
+  // 查询用户是否已同意（仅对已登录用户）
+  let agreed = false;
+  if (req.user) {
+    const agreement = await database.queryOne<{ id: number }>(
+      'SELECT id FROM beat_license_agreements WHERE user_id = ? AND beat_id = ? LIMIT 1',
+      [req.user.id, beat.id]
+    );
+    agreed = !!agreement;
+  }
 
   res.json({
     content: template?.content ?? '',
     version: template?.version ?? '1.0',
-    agreed: !!agreement
+    agreed
   });
 });
 

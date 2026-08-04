@@ -1193,7 +1193,7 @@ async function getDailyLotteryChances(userId: number) {
   return resolveLevelByPoints(totalPoints).lottery_daily_chances;
 }
 
-router.get('/forum/points/config', requireAuth, async (_req: AuthRequest, res) => {
+router.get('/forum/points/config', optionalAuth, async (req: AuthRequest, res) => {
   try {
     res.json({
       levels: POINT_LEVEL_CONFIG,
@@ -1227,22 +1227,24 @@ router.get('/forum/points/config', requireAuth, async (_req: AuthRequest, res) =
 });
 
 // GET /api/forum/lottery/status — 获取抽奖状态
-router.get('/forum/lottery/status', requireAuth, async (req: AuthRequest, res) => {
+router.get('/forum/lottery/status', optionalAuth, async (req: AuthRequest, res) => {
   try {
     const db = getForumDatabaseClient();
 
-    // 不限制抽奖次数，返回一个很大的数字
     const remainingChances = 999;
 
-    // 获取中奖记录
-    const records = await db.queryMany<{ id: number; prize_name: string; points: number; vip_days: number; created_at: string }>(
-      `SELECT id, prize_name, points, vip_days, created_at
-       FROM forum_lottery_records
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT 10`,
-      [req.user!.id]
-    );
+    // 获取中奖记录（仅对已登录用户）
+    let records: any[] = [];
+    if (req.user) {
+      records = await db.queryMany<{ id: number; prize_name: string; points: number; vip_days: number; created_at: string }>(
+        `SELECT id, prize_name, points, vip_days, created_at
+         FROM forum_lottery_records
+         WHERE user_id = ?
+         ORDER BY created_at DESC
+         LIMIT 10`,
+        [req.user.id]
+      );
+    }
 
     res.json({
       remaining_chances: remainingChances,
