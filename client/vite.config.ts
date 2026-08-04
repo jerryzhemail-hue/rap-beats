@@ -18,15 +18,22 @@ export default defineConfig(({ mode }) => {
         '/api': 'http://localhost:3000',
         '/audio': 'http://localhost:3000',
         '/covers': 'http://localhost:3000',
-        '/avatars': 'http://localhost:3000'
+        '/avatars': 'http://localhost:3000',
+        '/banners': 'http://localhost:3000',
+        '/forum-images': 'http://localhost:3000',
+        '/forum-audio': 'http://localhost:3000'
       }
     },
     build: {
       outDir: 'dist',
       rollupOptions: {
         output: {
-          manualChunks: {
-            vendor: ['vue', 'vue-router', 'pinia']
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('vue') || id.includes('pinia') || id.includes('vue-router')) {
+                return 'vendor'
+              }
+            }
           }
         }
       }

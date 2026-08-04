@@ -163,6 +163,150 @@ npm run build
 
 如果前端端口被占用，请以 Vite 实际输出的地址为准。
 
+## 生产部署
+
+### 服务器推荐配置
+
+| 配置项 | 推荐值 | 说明 |
+|--------|--------|------|
+| CPU | 2 核 | 单机单实例足够 |
+| 内存 | 4 GB | MySQL + Node + ffmpeg 同机运行 |
+| 磁盘 | 60 GB SSD | 音频/图片走 OSS，本地只放代码和数据库 |
+| 带宽 | 5 Mbps 或流量包 | 游客试听经服务器代理，需估算流量 |
+| 系统 | Ubuntu 22.04 LTS | apt 装依赖最方便 |
+| 区域 | 国内（需备案）或香港（免备案） | 想快速上线选香港 |
+
+推荐服务商：阿里云轻量应用服务器 / 腾讯云 Lighthouse，新用户约 ¥99-200/年。
+
+### 系统依赖
+
+生产服务器需要安装：
+
+```bash
+# Node.js 20 LTS
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+
+# MySQL 8
+apt install -y mysql-server
+systemctl enable mysql
+
+# Nginx
+apt install -y nginx
+
+# ffmpeg（音频处理 + BPM 检测核心依赖）
+apt install -y ffmpeg
+
+# Python + librosa（可选，装不上 BPM 检测会降级）
+apt install -y python3-pip
+pip3 install librosa --break-system-packages
+
+# pm2
+npm install -g pm2
+```
+
+### 快速初始化
+
+```bash
+# 在服务器上以 root 运行一次性初始化
+curl -sL https://raw.githubusercontent.com/YOUR_USERNAME/rap-beats/main/deploy/init-server.sh | bash
+```
+
+或手动按顺序执行 `deploy/init-server.sh` 中的步骤（安装依赖、配置 MySQL、建库、建账号、配置 Nginx、启动 pm2）。
+
+### 部署步骤
+
+1. **克隆代码或 git pull**
+
+   ```bash
+   cd /opt/rap-beats
+   git pull origin main
+   ```
+
+2. **配置环境变量**
+
+   复制 `server/.env.production` 为 `server/.env`，填写真实值：
+
+   ```env
+   DB_DRIVER=mysql
+   DB_HOST=127.0.0.1
+   DB_PORT=3306
+   DB_USER=rapbeats          # 建议用专用账号而非 root
+   DB_PASSWORD=你的强密码
+   DB_NAME=rap_beats
+   FORUM_DB_NAME=rap_beats_forum
+   JWT_SECRET=上面生成的64位随机串
+   XUNHU_APPID=虎皮椒应用ID
+   XUNHU_APPSECRET=虎皮椒应用密钥
+   BASE_URL=https://你的域名
+   CLIENT_URL=https://你的域名
+   STORAGE_DRIVER=oss
+   # OSS 配置...
+   ```
+
+3. **构建前后端**
+
+   ```bash
+   cd /opt/rap-beats/server && npm ci && npm run build
+   cd /opt/rap-beats/client && npm ci && npm run build
+   ```
+
+4. **配置 Nginx**
+
+   ```bash
+   cp /opt/rap-beats/deploy/nginx.conf /etc/nginx/sites-available/rap-beats
+   # 编辑 /etc/nginx/sites-available/rap-beats，把 YOUR_DOMAIN 替换为真实域名
+   ln -sf /etc/nginx/sites-available/rap-beats /etc/nginx/sites-enabled/rap-beats
+   nginx -t && systemctl reload nginx
+   ```
+
+5. **启动服务**
+
+   ```bash
+   pm2 start /opt/rap-beats/deploy/ecosystem.config.js
+   pm2 save
+   pm2 startup   # 按提示配置开机自启
+   ```
+
+6. **配置 HTTPS**（域名解析好后）
+
+   ```bash
+   certbot --nginx -d your-domain.com -d www.your-domain.com
+   ```
+
+### 后续更新部署
+
+代码更新后，在服务器上运行：
+
+```bash
+cd /opt/rap-beats
+./deploy/deploy.sh
+```
+
+或推送到 GitHub main 分支，由 GitHub Actions 自动构建 Docker 镜像并部署（需配置 SERVER_SSH_PRIVATE_KEY 等 Secrets）。
+
+### 数据库备份
+
+双库每天凌晨 3:00 自动备份：
+
+```bash
+# 添加 cron 任务
+crontab -e
+# 添加这一行：
+0 3 * * * /opt/rap-beats/deploy/scripts/backup.sh >> /var/log/rap-beats/backup.log 2>&1
+```
+
+备份脚本会自动将 `rap_beats` 和 `rap_beats_forum` 两个库的 mysqldump 压缩后上传 OSS，保留 7 天本地备份 / 30 天 OSS 备份。
+
+### 健康检查
+
+- **后端**：`curl http://127.0.0.1:3000/api/health`
+- **前端**：`curl http://127.0.0.1/`（返回 index.html）
+
+pm2 会自动重启崩溃的 Node.js 进程。
+
+---
+
 ## 常见问题
 
 ### 1. 前端启动了但页面打不开
