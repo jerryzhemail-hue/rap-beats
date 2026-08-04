@@ -196,12 +196,12 @@ router.get('/stats', async (_req: Request, res: Response) => {
       r.id,
       r.name,
       COUNT(DISTINCT bp.beat_id) as beat_count,
-      COALESCE(SUM(b.play_count), 0) as play_count,
+      COALESCE(SUM((SELECT COUNT(*) FROM play_events pe WHERE pe.beat_id = b.id)), 0) as play_count,
       COALESCE(SUM(b.download_count), 0) as download_count,
       COUNT(DISTINCT f.id) as favorite_count,
       (
         COUNT(DISTINCT bp.beat_id) * ? +
-        COALESCE(SUM(b.play_count), 0) * ? +
+        COALESCE(SUM((SELECT COUNT(*) FROM play_events pe WHERE pe.beat_id = b.id)), 0) * ? +
         COALESCE(SUM(b.download_count), 0) * ? +
         COUNT(DISTINCT f.id) * ?
       ) as score,
