@@ -23,6 +23,7 @@ const genreCategory = ref(defaultGenreCategoryValue)
 const genre = ref(defaultGenreValue)
 const selectedRappers = ref<string[]>([])
 const bpm = ref<number | undefined>(undefined)
+const bpmConfidence = ref<number | null>(null)
 const musicKey = ref('')
 const tags = ref('')
 const duration = ref<number>(0)
@@ -240,6 +241,7 @@ async function handleDetectBpm() {
       bpmDetectProgress.value = p
     })
     bpm.value = Math.round(result.bpm)
+    bpmConfidence.value = result.confidence ?? null
     if (result.key) {
       musicKey.value = result.key
     }
@@ -482,6 +484,10 @@ async function submitUpload() {
                 <template v-else>自动识别</template>
               </button>
             </div>
+            <p v-if="bpmConfidence !== null" class="field-hint" :class="{ 'hint-warn': bpmConfidence < 0.4 }">
+              自动识别置信度 {{ Math.round(bpmConfidence * 100) }}%
+              <template v-if="bpmConfidence < 0.4">—— 较低，建议手动核对</template>
+            </p>
             <p class="field-hint">请输入 {{ BPM_MIN }}-{{ BPM_MAX }} 之间的整数，或点击自动识别。</p>
           </div>
 
@@ -951,5 +957,16 @@ async function submitUpload() {
 .submit-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.field-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+}
+
+.field-hint.hint-warn {
+  color: var(--danger, #e5484d);
+  font-weight: 500;
 }
 </style>

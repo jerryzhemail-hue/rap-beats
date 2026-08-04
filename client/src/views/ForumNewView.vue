@@ -57,6 +57,8 @@ let suggestTimer: ReturnType<typeof setTimeout> | null = null
 
 // 当前 BPM 分析状态：null=未上传, 'analyzing'=分析中, number=已识别
 const bpmStatus = ref<number | 'analyzing' | null>(null)
+// BPM 识别置信度（0-1），用于低置信度提示
+const bpmConfidence = ref<number | null>(null)
 
 // 风格选择：选择大类后重置子类
 watch(selectedGenreCategory, () => {
@@ -357,9 +359,11 @@ async function handleAudioFile(file: File) {
     } else if (result.bpm) {
       // 元数据直接带 BPM，立即展示
       bpmStatus.value = result.bpm
+      bpmConfidence.value = result.bpm_confidence ?? null
       form.value.music_bpm = result.bpm
     } else {
       bpmStatus.value = null
+      bpmConfidence.value = null
       form.value.music_bpm = null
     }
 
@@ -425,9 +429,11 @@ function pollAudioBpm(audioId: string) {
         }
         if (result.bpm) {
           bpmStatus.value = result.bpm
+          bpmConfidence.value = result.bpm_confidence ?? null
           form.value.music_bpm = result.bpm
         } else {
           bpmStatus.value = null
+          bpmConfidence.value = null
           form.value.music_bpm = null
         }
       } else if (attempts >= MAX_ATTEMPTS) {
@@ -839,6 +845,12 @@ async function handleSubmit() {
                   <div v-else-if="bpmStatus" class="music-bpm-badge">
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                     {{ bpmStatus }} BPM
+                  </div>
+                  <div
+                    v-if="bpmStatus && bpmConfidence !== null && bpmConfidence < 0.4"
+                    class="music-bpm-hint"
+                  >
+                    置信度 {{ Math.round(bpmConfidence * 100) }}% 较低，仅供参考
                   </div>
                 </div>
                 <!-- 允许下载开关 -->
@@ -1477,6 +1489,11 @@ async function handleSubmit() {
 .music-bpm-badge.analyzing {
   color: #a78bfa;
   background: rgba(167, 139, 250, 0.15);
+}
+.music-bpm-hint {
+  font-size: 12px;
+  color: #f87171;
+  margin-top: 4px;
 }
 .bpm-spinner {
   width: 10px;
