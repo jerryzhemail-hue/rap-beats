@@ -1,0 +1,52 @@
+# ============================================================
+# 本地开发环境 Docker Compose 配置
+# 
+# 使用独立的本地 MySQL 数据库，与线上环境完全隔离
+# 
+# 启动：docker compose -f docker-compose.dev.yml up -d
+# 停止：docker compose -f docker-compose.dev.yml down
+# 清理数据：docker compose -f docker-compose.dev.yml down -v
+# ============================================================
+services:
+  # ============================================================
+  # 本地 MySQL 数据库（开发专用）
+  # 数据库名：rap_beats_dev
+  # 端口：3307（避免与线上冲突）
+  # ============================================================
+  mysql:
+    image: mysql:8.0
+    container_name: rap-beats-dev-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: dev_root_2024
+      MYSQL_DATABASE: rap_beats_dev
+      MYSQL_USER: dev_user
+      MYSQL_PASSWORD: dev_pass_2024
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+      TZ: Asia/Shanghai
+    ports:
+      - "3307:3306"
+    volumes:
+      - rap-beats-dev-mysql-data:/var/lib/mysql
+    networks:
+      - rap-beats-dev-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+# ============================================================
+# 网络
+# ============================================================
+networks:
+  rap-beats-dev-net:
+    driver: bridge
+
+# ============================================================
+# 持久化卷
+# ============================================================
+volumes:
+  rap-beats-dev-mysql-data:

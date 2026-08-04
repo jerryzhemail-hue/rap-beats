@@ -1,124 +1,332 @@
 #!/bin/bash
 # ============================================================
-# 本地 Docker Compose 部署脚本
-# 用于：本地测试 / 开发服务器部署
+# Rap Beats 部署脚本
 #
-# 用法：
-#   本地部署：./deploy.sh
-#   本地重启：./deploy.sh restart
-#   清理：./deploy.sh clean
+# 本地开发：  ./deploy.sh local
+# 部署到服务器：./deploy.sh deploy
 # ============================================================
 set -e
 
-# 颜色
+# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-log()  { echo -e "${GREEN}[deploy]${NC} $1"; }
-warn() { echo -e "${YELLOW}[warn]${NC} $1"; }
-err()  { echo -e "${RED}[error]${NC} $1" >&2; }
+# 日志函数
+log()     { echo -e "${GREEN}[deploy]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[warn]${NC} $1"; }
+err()     { echo -e "${RED}[error]${NC} $1" >&2; }
+info()    { echo -e "${BLUE}[info]${NC} $1"; }
 
-# 检查 .env 文件
-if [ ! -f ".env" ]; then
-    if [ -f ".env.production" ]; then
-        warn ".env 文件不存在，从 .env.production 复制（请编辑 .env 填写真实密钥！）"
-        cp .env.production .env
-    else
-        err ".env 文件不存在，请创建 .env 文件"
+# 服务器配置
+SERVER_HOST="${SERVER_HOST:-47.85.98.237}"
+SERVER_USER="${SERVER_USER:-root}"
+SERVER_PORT="${SERVER_PORT:-22}"
+SERVER_DEPLOY_DIR="${SERVER_DEPLOY_DIR:-/opt/rap-beats}"
+
+# Docker Compose 文件
+DEV_COMPOSE_FILE="docker-compose.dev.yml"
+PROD_COMPOSE_FILE="docker-compose.yml"
+
+# ============================================================
+# 检查环境
+# ============================================================
+check_docker() {
+    if ! command -v docker &> /dev/null; then
+        err "Docker 未安装"
         exit 1
     fi
-fi
-
-# 检查必填环境变量
-check_env() {
-    local var=$1
-    local val=$(grep "^${var}=" .env | cut -d '=' -f2- | tr -d '"' | tr -d "'")
-    if [ -z "$val" ] || [[ "$val" == change-this-* ]] || [[ "$val" == your-* ]]; then
-        err "请在 .env 中设置 $var"
-        exit 1
-    fi
+    log "Docker: $(docker --version | cut -d' ' -f3 | cut -d',' -f1)"
 }
 
-log "检查环境变量..."
-check_env "MYSQL_ROOT_PASSWORD"
-check_env "JWT_SECRET"
-echo -e "${GREEN}[OK]${NC} 环境变量检查通过"
+# ============================================================
+# 本地 Docker 开发环境
+# ============================================================
+start_local_dev() {
+    check_docker
+    log "启动本地开发环境（独立数据库）..."
 
-# 构建并启动
-build_and_up() {
-    log "构建 Docker 镜像..."
-    docker compose build --pull
+    # 启动本地 MySQL
+    log "启动本地 MySQL（端口 3307）..."
+    docker compose -f "$DEV_COMPOSE_FILE" up -d mysql
 
-    log "启动服务..."
-    docker compose up -d
+    log "等待 MySQL 初始化（约 15 秒）..."
+    sleep 15
 
-    log "等待服务启动..."
-    sleep 5
-
-    log "检查容器状态..."
-    docker compose ps
-
-    # 健康检查
-    log "检查后端健康状态..."
-    local retries=10
+    # 检查 MySQL 是否就绪
+    local retries=15
     while [ $retries -gt 0 ]; do
-        if docker exec rap-beats-server wget -q --spider http://localhost:3000/api/health 2>/dev/null; then
-            echo -e "${GREEN}[OK]${NC} 后端服务健康"
+        if docker exec rap-beats-dev-mysql mysqladmin ping -h localhost --silent 2>/dev/null; then
+            log "MySQL 已就绪 ✅"
             break
         fi
         retries=$((retries - 1))
         if [ $retries -eq 0 ]; then
-            err "后端服务启动失败，请检查日志：docker compose logs server"
+            err "MySQL 启动失败"
             exit 1
         fi
-        echo -e "${YELLOW}等待后端服务就绪... ($retries)${NC}"
+        echo -e "${YELLOW}等待 MySQL... ($retries)${NC}"
+        sleep 2
+    done
+
+    # 启动后端服务（在后台）
+    log "启动后端服务..."
+    cd server
+    npm run dev &
+    cd ..
+
+    # 等待后端启动
+    log "等待后端服务..."
+    sleep 5
+
+    # 检查后端健康状态
+    retries=15
+    while [ $retries -gt 0 ]; do
+        if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
+            log "后端服务健康 ✅"
+            break
+        fi
+        retries=$((retries - 1))
+        if [ $retries -eq 0 ]; then
+            warn "后端可能还未就绪，请查看终端日志"
+            break
+        fi
+        echo -e "${YELLOW}等待后端... ($retries)${NC}"
+        sleep 2
+    done
+
+    echo ""
+    log "本地开发环境已启动！"
+    echo ""
+    echo "访问地址："
+    echo "  前端：http://localhost:5173"
+    echo "  后端：http://localhost:3000"
+    echo "  MySQL： localhost:3307"
+    echo ""
+    info "启动前端：cd client && npm run dev"
+    echo ""
+    info "常用命令："
+    echo "  ./deploy.sh local-stop    # 停止本地服务"
+    echo "  ./deploy.sh local-clean   # 清理本地数据库"
+    echo "  docker compose -f $DEV_COMPOSE_FILE logs -f  # 查看 MySQL 日志"
+}
+
+stop_local_dev() {
+    log "停止本地服务..."
+
+    # 停止后端进程
+    pkill -f "tsx watch src/index.ts" 2>/dev/null || true
+
+    # 停止 MySQL
+    docker compose -f "$DEV_COMPOSE_FILE" down 2>/dev/null || true
+
+    log "本地服务已停止"
+}
+
+clean_local_dev() {
+    log "清理本地开发环境..."
+    read -p "确认清理？这会删除本地数据库数据！[y/N]：" confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        pkill -f "tsx watch src/index.ts" 2>/dev/null || true
+        docker compose -f "$DEV_COMPOSE_FILE" down -v
+        log "清理完成"
+    else
+        info "取消清理"
+    fi
+}
+
+# ============================================================
+# 检查远程服务器
+# ============================================================
+check_remote() {
+    log "检查远程服务器连接..."
+    if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "${SERVER_USER}@${SERVER_HOST}" "echo 'SSH OK'" 2>/dev/null; then
+        err "无法连接服务器 ${SERVER_USER}@${SERVER_HOST}"
+        exit 1
+    fi
+    log "SSH 连接成功 ✅"
+}
+
+# ============================================================
+# 部署到远程服务器
+# ============================================================
+deploy_remote() {
+    check_docker
+    check_remote
+
+    log "部署到服务器..."
+    info "服务器：${SERVER_USER}@${SERVER_HOST}"
+
+    # 1. 备份
+    log "备份当前版本..."
+    ssh "${SERVER_USER}@${SERVER_HOST}" "
+        cd ${SERVER_DEPLOY_DIR}
+        BACKUP_DIR=\$(date +'%Y%m%d_%H%M%S')
+        mkdir -p backups/\${BACKUP_DIR}
+        cp -r server/dist backups/\${BACKUP_DIR}/ 2>/dev/null || true
+        cp -r client/dist backups/\${BACKUP_DIR}/ 2>/dev/null || true
+        cp .env backups/\${BACKUP_DIR}/ 2>/dev/null || true
+        echo '备份完成: backups/\${BACKUP_DIR}/'
+    "
+
+    # 2. 同步代码
+    log "同步代码到服务器..."
+    EXCLUDE_ARGS=(
+        --exclude='node_modules'
+        --exclude='.git'
+        --exclude='client/node_modules'
+        --exclude='server/node_modules'
+        --exclude='client/dist'
+        --exclude='server/dist'
+        --exclude='*.db'
+        --exclude='.env'
+        --exclude='.env.local'
+        --exclude='.DS_Store'
+        --exclude='*.log'
+        --exclude='backups'
+        --exclude='data'
+    )
+
+    if command -v rsync &> /dev/null; then
+        rsync -az --progress "${EXCLUDE_ARGS[@]}" \
+            "$SCRIPT_DIR/" \
+            "${SERVER_USER}@${SERVER_HOST}:${SERVER_DEPLOY_DIR}/"
+    else
+        scp -r "$SCRIPT_DIR/" "${SERVER_USER}@${SERVER_HOST}:${SERVER_DEPLOY_DIR}/"
+    fi
+
+    # 3. 重新构建
+    log "在服务器上构建..."
+    ssh "${SERVER_USER}@${SERVER_HOST}" "
+        cd ${SERVER_DEPLOY_DIR}
+        docker compose build --pull server client
+    "
+
+    # 4. 重启服务
+    log "重启服务..."
+    ssh "${SERVER_USER}@${SERVER_HOST}" "
+        cd ${SERVER_DEPLOY_DIR}
+        docker compose up -d --remove-orphans
+    "
+
+    # 5. 健康检查
+    log "检查服务状态..."
+    sleep 10
+    local retries=20
+    while [ $retries -gt 0 ]; do
+        if ssh "${SERVER_USER}@${SERVER_HOST}" "curl -sf http://localhost:3000/api/health" > /dev/null 2>&1; then
+            log "服务健康 ✅"
+            break
+        fi
+        retries=$((retries - 1))
+        if [ $retries -eq 0 ]; then
+            warn "服务可能还未就绪，请检查 ./deploy.sh status"
+            break
+        fi
+        echo -e "${YELLOW}等待服务... ($retries)${NC}"
         sleep 3
     done
 
-    log "所有服务启动完成！"
     echo ""
-    echo "访问地址："
-    echo "  前端：http://localhost"
-    echo "  后端：http://localhost/api/health"
-    echo ""
-    echo "常用命令："
-    echo "  查看日志：docker compose logs -f"
-    echo "  重启服务：docker compose restart"
-    echo "  停止服务：docker compose down"
-    echo "  清理数据：docker compose down -v"
+    log "部署完成！"
+    echo "  服务器：${SERVER_HOST}"
+    echo "  访问：  http://${SERVER_HOST}"
 }
 
-case "${1:-up}" in
-    up)
-        build_and_up
-        ;;
-    restart)
-        log "重启所有服务..."
-        docker compose restart
+# ============================================================
+# 服务器管理
+# ============================================================
+server_status() {
+    check_remote
+    log "服务器状态"
+    ssh "${SERVER_USER}@${SERVER_HOST}" "
+        cd ${SERVER_DEPLOY_DIR}
+        echo '=== 容器状态 ==='
         docker compose ps
+        echo ''
+        echo '=== 资源使用 ==='
+        docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}'
+    "
+}
+
+server_logs() {
+    check_remote
+    local service="${1:-}"
+    log "查看服务器日志..."
+    if [ -n "$service" ]; then
+        ssh "${SERVER_USER}@${SERVER_HOST}" "cd ${SERVER_DEPLOY_DIR} && docker compose logs -f --tail=100 $service"
+    else
+        ssh "${SERVER_USER}@${SERVER_HOST}" "cd ${SERVER_DEPLOY_DIR} && docker compose logs -f --tail=50"
+    fi
+}
+
+server_restart() {
+    check_remote
+    log "重启服务..."
+    ssh "${SERVER_USER}@${SERVER_HOST}" "cd ${SERVER_DEPLOY_DIR} && docker compose restart"
+    sleep 5
+    server_status
+}
+
+# ============================================================
+# 帮助信息
+# ============================================================
+show_help() {
+    echo "Rap Beats 部署脚本"
+    echo ""
+    echo "本地开发命令："
+    echo "  ./deploy.sh local         启动本地开发环境（独立数据库）"
+    echo "  ./deploy.sh local-stop   停止本地服务"
+    echo "  ./deploy.sh local-clean  清理本地数据库"
+    echo ""
+    echo "远程部署命令："
+    echo "  ./deploy.sh deploy       部署到服务器"
+    echo "  ./deploy.sh status       查看服务器状态"
+    echo "  ./deploy.sh logs         查看服务器日志"
+    echo "  ./deploy.sh restart      重启服务器服务"
+    echo ""
+}
+
+# ============================================================
+# 主程序
+# ============================================================
+case "${1:-}" in
+    local|local-start)
+        start_local_dev
         ;;
-    stop)
-        log "停止所有服务..."
-        docker compose stop
+    local-stop)
+        stop_local_dev
         ;;
-    down)
-        log "停止并移除所有容器..."
-        docker compose down
+    local-clean)
+        clean_local_dev
         ;;
-    clean)
-        log "停止并移除所有容器 + 数据卷（⚠️ 会删除数据库数据！）"
-        docker compose down -v
+    deploy)
+        deploy_remote
+        ;;
+    status)
+        server_status
         ;;
     logs)
-        docker compose logs -f "${2:-}"
+        server_logs "$2"
+        ;;
+    restart)
+        server_restart
+        ;;
+    help|--help|-h)
+        show_help
         ;;
     *)
-        echo "用法: $0 {up|restart|stop|down|clean|logs}"
-        exit 1
+        if [ -z "$1" ]; then
+            show_help
+        else
+            err "未知命令: $1"
+            show_help
+            exit 1
+        fi
         ;;
 esac
