@@ -1410,7 +1410,7 @@ router.post('/forum/points/exchange', exchangeLimiter, requireAuth, async (req: 
       message: `成功兑换 ${config.duration_days} 天${level === 'basic' ? '基础' : level === 'premium' ? '高级' : '至尊'}会员`,
       points_spent: config.points,
       vip_level: config.vip_level,
-      vip_expire_at: expireDate.toISOString(),
+      vip_expire_at: toDateTimeString(expireDate),
       total_points: newTotalPoints,
     });
   } catch (err: any) {

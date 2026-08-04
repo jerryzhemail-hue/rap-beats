@@ -52,19 +52,15 @@ log "=== 开始备份 MySQL 双库 ==="
 # 备份主库
 BACKUP_FILE_MAIN="${BACKUP_DIR}/${DB_NAME}_${DATE}.sql.gz"
 log "备份主库 ${DB_NAME}..."
-mysqldump -h"$DB_HOST" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASSWORD" \
-    --single-transaction --quick --lock-tables=false \
-    --default-character-set=utf8mb4 \
-    "$DB_NAME" | gzip > "$BACKUP_FILE_MAIN"
+docker exec rap-beats-mysql sh -c "exec mysqldump -uroot -p'$DB_PASSWORD' --single-transaction --quick --lock-tables=false --default-character-set=utf8mb4 '$DB_NAME'" \
+    | gzip > "$BACKUP_FILE_MAIN"
 log "主库备份完成: $BACKUP_FILE_MAIN ($(du -h $BACKUP_FILE_MAIN | cut -f1))"
 
 # 备份论坛库
 BACKUP_FILE_FORUM="${BACKUP_DIR}/${FORUM_DB_NAME}_${DATE}.sql.gz"
 log "备份论坛库 ${FORUM_DB_NAME}..."
-mysqldump -h"$DB_HOST" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASSWORD" \
-    --single-transaction --quick --lock-tables=false \
-    --default-character-set=utf8mb4 \
-    "$FORUM_DB_NAME" | gzip > "$BACKUP_FILE_FORUM"
+docker exec rap-beats-mysql sh -c "exec mysqldump -uroot -p'$DB_PASSWORD' --single-transaction --quick --lock-tables=false --default-character-set=utf8mb4 '$FORUM_DB_NAME'" \
+    | gzip > "$BACKUP_FILE_FORUM"
 log "论坛库备份完成: $BACKUP_FILE_FORUM ($(du -h $BACKUP_FILE_FORUM | cut -f1))"
 
 # 上传 OSS
