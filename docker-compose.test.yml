@@ -1,6 +1,7 @@
 # ============================================================
 # 本地测试环境（与线上完全隔离）
-# 端口：MySQL 3307 / 后端 3100 / 前端 8080
+# 端口：MySQL 3308 / 后端 3100 / 前端 8080
+# 注意：3307 留给本地开发库（docker-compose.dev.yml 的 rap_beats_dev）
 # 存储：本地文件（server/data 目录，挂载进容器）
 #
 # 启动：
@@ -22,7 +23,7 @@ services:
       MYSQL_COLLATION: utf8mb4_unicode_ci
       TZ: Asia/Shanghai
     ports:
-      - "3307:3306"
+      - "3308:3306"
     volumes:
       - rap-beats-test-mysql-data:/var/lib/mysql
     healthcheck:
