@@ -11,6 +11,11 @@ dist-ssr/
 .env.local
 .env.*.local
 *.env
+.env.production
+.env.*.production
+!.env.example
+!server/.env.example
+!server/.env.mysql.example
 
 # Database (contains user data)
 server/data/*.db
@@ -38,3 +43,10 @@ Thumbs.db
 
 # Debug logs
 .dbg/
+
+# 生产环境变量（含密钥，严禁提交）
+.env.production
+.env.*.production
+!.env.example
+!server/.env.example
+!server/.env.mysql.example
