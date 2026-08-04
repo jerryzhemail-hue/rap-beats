@@ -46,8 +46,39 @@ app.use('/forum-audio', express.static(path.join(__dirname, '../data/forum-audio
 app.use('/forum', express.static(path.join(__dirname, '../data/forum')));
 
 // 健康检查（Docker 健康检查 & 负载均衡探活）
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', async (_req, res) => {
+  const health: {
+    status: 'ok' | 'degraded';
+    timestamp: string;
+    services: Record<string, { status: 'ok' | 'error'; message?: string }>;
+  } = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    services: {}
+  };
+
+  // 检查数据库连接
+  try {
+    const db = getDatabaseClient();
+    await db.queryOne('SELECT 1');
+    health.services.database = { status: 'ok' };
+  } catch (err: any) {
+    health.status = 'degraded';
+    health.services.database = { status: 'error', message: err.message };
+  }
+
+  // 检查论坛数据库连接
+  try {
+    const forumDb = getForumDatabaseClient();
+    await forumDb.queryOne('SELECT 1');
+    health.services.forumDatabase = { status: 'ok' };
+  } catch (err: any) {
+    health.status = 'degraded';
+    health.services.forumDatabase = { status: 'error', message: err.message };
+  }
+
+  const statusCode = health.status === 'ok' ? 200 : 503;
+  res.status(statusCode).json(health);
 });
 
 async function startServer() {
