@@ -81,10 +81,10 @@ jobs:
           cache-to: type=gha,mode=max,scope=client
 
       - name: Image digest (server)
-        run: echo "Server image: ${{ env.SERVER_IMAGE_SHA }}"
+        run: 'echo "Server image: ${{ env.SERVER_IMAGE_SHA }}"'
 
       - name: Image digest (client)
-        run: echo "Client image: ${{ env.CLIENT_IMAGE_SHA }}"
+        run: 'echo "Client image: ${{ env.CLIENT_IMAGE_SHA }}"'
 
   deploy:
     name: Deploy to Server
