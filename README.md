@@ -205,105 +205,64 @@ pip3 install librosa --break-system-packages
 npm install -g pm2
 ```
 
-### 快速初始化
+### 快速初始化（服务器一次性设置）
+
+服务器需要安装 Docker 并准备好目录结构。仓库提供两个一次性脚本：
 
 ```bash
-# 在服务器上以 root 运行一次性初始化
-curl -sL https://raw.githubusercontent.com/YOUR_USERNAME/rap-beats/main/deploy/init-server.sh | bash
+# 安装 Docker + 配置镜像加速（Ubuntu/Debian 适用）
+./server-setup.sh
+
+# 或：生产服务器首次设置（创建目录、拷贝 compose 文件）
+./deploy-prod.sh
 ```
 
-或手动按顺序执行 `deploy/init-server.sh` 中的步骤（安装依赖、配置 MySQL、建库、建账号、配置 Nginx、启动 pm2）。
+部署目录约定为 `/opt/rap-beats`，环境变量文件为 `/opt/rap-beats/server/.env`（**包含密钥，绝不提交到 git**），配置项参考 `server/.env.example`。
 
-### 部署步骤
+### 部署方式（二选一）
 
-1. **克隆代码或 git pull**
+**方式 A：GitHub Actions 自动部署（推荐）**
 
-   ```bash
-   cd /opt/rap-beats
-   git pull origin main
-   ```
+推送代码到 `main` 分支后，[.github/workflows/deploy.yml](.github/workflows/deploy.yml) 会自动：
 
-2. **配置环境变量**
+1. 构建 server / client Docker 镜像并推送到 ghcr.io
+2. SSH 登录服务器，先 `mysqldump` 备份双库
+3. 同步 compose 配置文件
+4. `docker compose up -d` 拉取新镜像并重启容器（MySQL 数据卷保留）
+5. 健康检查
 
-   复制 `server/.env.production` 为 `server/.env`，填写真实值：
+需要在 GitHub 仓库配置：
 
-   ```env
-   DB_DRIVER=mysql
-   DB_HOST=127.0.0.1
-   DB_PORT=3306
-   DB_USER=rapbeats          # 建议用专用账号而非 root
-   DB_PASSWORD=你的强密码
-   DB_NAME=rap_beats
-   FORUM_DB_NAME=rap_beats_forum
-   JWT_SECRET=上面生成的64位随机串
-   XUNHU_APPID=虎皮椒应用ID
-   XUNHU_APPSECRET=虎皮椒应用密钥
-   BASE_URL=https://你的域名
-   CLIENT_URL=https://你的域名
-   STORAGE_DRIVER=oss
-   # OSS 配置...
-   ```
+- **Secret**：`SERVER_SSH_PRIVATE_KEY`（服务器部署公钥对应的私钥）
+- **Variables**：`SERVER_HOST`、`SERVER_USER`、`SERVER_DEPLOY_DIR`、`DB_NAME`、`FORUM_DB_NAME`
 
-3. **构建前后端**
-
-   ```bash
-   cd /opt/rap-beats/server && npm ci && npm run build
-   cd /opt/rap-beats/client && npm ci && npm run build
-   ```
-
-4. **配置 Nginx**
-
-   ```bash
-   cp /opt/rap-beats/deploy/nginx.conf /etc/nginx/sites-available/rap-beats
-   # 编辑 /etc/nginx/sites-available/rap-beats，把 YOUR_DOMAIN 替换为真实域名
-   ln -sf /etc/nginx/sites-available/rap-beats /etc/nginx/sites-enabled/rap-beats
-   nginx -t && systemctl reload nginx
-   ```
-
-5. **启动服务**
-
-   ```bash
-   pm2 start /opt/rap-beats/deploy/ecosystem.config.js
-   pm2 save
-   pm2 startup   # 按提示配置开机自启
-   ```
-
-6. **配置 HTTPS**（域名解析好后）
-
-   ```bash
-   certbot --nginx -d your-domain.com -d www.your-domain.com
-   ```
-
-### 后续更新部署
-
-代码更新后，在服务器上运行：
+**方式 B：手动部署**
 
 ```bash
-cd /opt/rap-beats
-./deploy/deploy.sh
-```
+# 本地开发（独立 MySQL，端口 3307）
+./deploy.sh local
 
-或推送到 GitHub main 分支，由 GitHub Actions 自动构建 Docker 镜像并部署（需配置 SERVER_SSH_PRIVATE_KEY 等 Secrets）。
+# 部署到服务器（构建镜像 + 同步 + 重启）
+./deploy.sh deploy
+```
 
 ### 数据库备份
 
-双库每天凌晨 3:00 自动备份：
+双库每天凌晨 3:00 自动备份到 `/opt/rap-beats/backups` 并可上传 OSS：
 
 ```bash
 # 添加 cron 任务
 crontab -e
-# 添加这一行：
-0 3 * * * /opt/rap-beats/deploy/scripts/backup.sh >> /var/log/rap-beats/backup.log 2>&1
+# 添加这一行（需按脚本内注释配置 OSS 凭证环境变量）：
+0 3 * * * /opt/rap-beats/scripts/backup.sh >> /var/log/rap-beats/backup.log 2>&1
 ```
-
-备份脚本会自动将 `rap_beats` 和 `rap_beats_forum` 两个库的 mysqldump 压缩后上传 OSS，保留 7 天本地备份 / 30 天 OSS 备份。
 
 ### 健康检查
 
-- **后端**：`curl http://127.0.0.1:3000/api/health`
+- **后端**：`curl http://127.0.0.1:3000/api/health`（会同时检测主库和论坛库连接）
 - **前端**：`curl http://127.0.0.1/`（返回 index.html）
 
-pm2 会自动重启崩溃的 Node.js 进程。
+容器崩溃时 Docker 的 `restart: unless-stopped` 会自动重启。
 
 ---
 
