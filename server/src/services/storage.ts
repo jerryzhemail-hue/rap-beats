@@ -301,11 +301,13 @@ export function resolvePublicAssetUrl(kind: StorageKind, storedValue: string | n
 
 export function resolveLocalAssetPath(kind: StorageKind, storedValue: string | null | undefined): string | null {
   if (!storedValue) return null;
-  if (isRemoteUrl(storedValue)) return null;
-
-  const normalized = storedValue.startsWith(PUBLIC_PREFIX[kind])
-    ? path.basename(storedValue)
-    : path.basename(storedValue.replace(/^\//, ''));
+  // 兼容数据库中存完整远程 URL 的情况（如从线上/OSS 恢复的数据）：
+  // 取 URL 文件名在本地目录查找，文件已同步到本地时可直接使用。
+  const normalized = isRemoteUrl(storedValue)
+    ? decodeURIComponent(new URL(storedValue).pathname.split('/').pop() || '')
+    : storedValue.startsWith(PUBLIC_PREFIX[kind])
+      ? path.basename(storedValue)
+      : path.basename(storedValue.replace(/^\//, ''));
 
   return path.join(LOCAL_DIRS[kind], normalized);
 }
