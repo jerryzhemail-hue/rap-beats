@@ -22,6 +22,15 @@ server/data/*.db
 server/data/*.db-shm
 server/data/*.db-wal
 
+# Runtime uploads (avatars/covers/audio/forum-* — 由 Express 静态托管，不入仓)
+server/data/avatars/
+server/data/covers/
+server/data/audio/
+server/data/banners/
+server/data/forum-images/
+server/data/forum-audio/
+server/data/forum-video/
+
 # Logs
 logs/
 *.log
