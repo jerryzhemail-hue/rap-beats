@@ -877,7 +877,7 @@ router.delete('/forum/comments/:id', requireAuth, async (req: AuthRequest, res) 
     }
 
     await db.execute('DELETE FROM forum_comments WHERE id = ?', [id]);
-    await db.execute('UPDATE forum_posts SET comment_count = MAX(0, comment_count - 1) WHERE id = ?', [comment.post_id]);
+    await db.execute('UPDATE forum_posts SET comment_count = GREATEST(0, comment_count - 1) WHERE id = ?', [comment.post_id]);
 
     res.json({ message: '删除成功' });
   } catch (err: any) {
