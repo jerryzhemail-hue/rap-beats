@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { fetchBeats } from '@/api/beats'
 import { deleteBeat, updateBeat, clearDemoBeats } from '@/api/admin'
+import { requestUploadTarget, uploadFileToTarget, type DirectUploadTarget } from '@/api/directUpload'
+import { resolveCoverUrl } from '@/utils/assets'
 import type { Beat } from '@/types'
 
 const beats = ref<Beat[]>([])
@@ -21,8 +23,31 @@ const editForm = ref<{
   key: string
   genre: string
   is_free: boolean
-}>({ id: 0, title: '', producer: '', bpm: null, key: '', genre: '', is_free: false })
+  cover_image: string | null
+}>({ id: 0, title: '', producer: '', bpm: null, key: '', genre: '', is_free: false, cover_image: null })
 const editLoading = ref(false)
+
+// Cover upload state (within edit modal)
+const coverFile = ref<File | null>(null)
+const coverPreview = ref<string | null>(null)
+const coverUploading = ref(false)
+const coverProgress = ref(0)
+const coverUploadError = ref('')
+const coverDragOver = ref(false)
+const coverFileInput = ref<HTMLInputElement | null>(null)
+
+// 当前编辑行在 beats 列表里的引用，用于保存后实时刷新卡片封面预览
+let editingBeat: Beat | null = null
+
+// 现有封面预览（来自 beat 列表 / 后端返回的 URL）
+const currentCoverUrl = computed(() => {
+  // 优先显示用户新选的本地预览
+  if (coverPreview.value) return coverPreview.value
+  if (editForm.value.cover_image) return resolveCoverUrl(editForm.value.cover_image)
+  return ''
+})
+
+const hasCoverSelected = computed(() => !!coverPreview.value || !!editForm.value.cover_image)
 
 // Confirm dialog state
 const confirmVisible = ref(false)
@@ -77,6 +102,7 @@ async function executeConfirm() {
 }
 
 function openEdit(beat: Beat) {
+  editingBeat = beat
   editForm.value = {
     id: beat.id,
     title: beat.title,
@@ -84,26 +110,155 @@ function openEdit(beat: Beat) {
     bpm: beat.bpm,
     key: beat.key,
     genre: beat.genre,
-    is_free: !!beat.is_free
+    is_free: !!beat.is_free,
+    cover_image: beat.cover_image ?? null
   }
+  // 每次打开弹框重置本地选图状态
+  coverFile.value = null
+  coverPreview.value = null
+  coverUploadError.value = ''
+  coverProgress.value = 0
   editVisible.value = true
 }
 
 function closeEdit() {
   editVisible.value = false
+  editingBeat = null
+  coverFile.value = null
+  coverPreview.value = null
+  coverUploadError.value = ''
+  coverProgress.value = 0
+}
+
+function handleCoverSelect(file: File) {
+  const allowed = ['image/jpeg', 'image/png', 'image/webp']
+  const okExt = ['.jpg', '.jpeg', '.png', '.webp'].some((ext) => file.name.toLowerCase().endsWith(ext))
+  if (!allowed.includes(file.type) && !okExt) {
+    coverUploadError.value = '不支持的图片格式，请上传 jpg/png/webp'
+    return
+  }
+  // 单张封面，5MB 上限（与上传流程保持一致）
+  if (file.size > 5 * 1024 * 1024) {
+    coverUploadError.value = '封面大小不能超过 5MB'
+    return
+  }
+  coverUploadError.value = ''
+  coverFile.value = file
+
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    coverPreview.value = (e.target?.result as string) || null
+  }
+  reader.readAsDataURL(file)
+}
+
+function onCoverInputChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file) handleCoverSelect(file)
+  // 清空 value 以便重复选同一张图也能触发 change
+  input.value = ''
+}
+
+function onCoverDrop(e: DragEvent) {
+  e.preventDefault()
+  coverDragOver.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (file) handleCoverSelect(file)
+}
+
+function onCoverDragOver(e: DragEvent) {
+  e.preventDefault()
+  coverDragOver.value = true
+}
+
+function onCoverDragLeave(e: DragEvent) {
+  e.preventDefault()
+  coverDragOver.value = false
+}
+
+function triggerCoverInput() {
+  coverFileInput.value?.click()
+}
+
+function removeCover() {
+  coverFile.value = null
+  coverPreview.value = null
+  // 把 cover_image 设为 null 表示清空封面（与 null 区别于 undefined）
+  editForm.value.cover_image = null
+  coverUploadError.value = ''
+}
+
+/**
+ * 上传封面到直传通道，返回 cover_image 的 storedValue。
+ * 如果没有选择新文件则返回 undefined（保持不变）或 null（清空封面）。
+ */
+async function uploadCoverIfNeeded(): Promise<string | null | undefined> {
+  if (!coverFile.value) {
+    // 没有新文件：如果用户点过"移除"，editForm.cover_image 已经是 null；
+    // 否则返回 undefined（保持不变）。
+    if (editForm.value.cover_image === null && editingBeat && (editingBeat.cover_image ?? null) !== null) {
+      return null
+    }
+    return undefined
+  }
+
+  coverUploading.value = true
+  coverProgress.value = 0
+  try {
+    const targets = await requestUploadTarget<{ direct_upload: boolean; cover?: DirectUploadTarget | null }>(
+      '/api/beats/upload-targets',
+      {
+        audio: null,
+        cover: {
+          name: coverFile.value.name,
+          type: coverFile.value.type || 'image/jpeg'
+        }
+      }
+    )
+
+    if (!targets.direct_upload || !targets.cover) {
+      throw new Error('直传通道未开启，请联系管理员启用 OSS 直传')
+    }
+
+    await uploadFileToTarget(targets.cover, coverFile.value, (p) => {
+      coverProgress.value = p
+    })
+
+    coverProgress.value = 100
+    return targets.cover.storedValue
+  } catch (err: any) {
+    coverUploadError.value = err?.message || '封面上传失败'
+    throw err
+  } finally {
+    coverUploading.value = false
+  }
 }
 
 async function saveEdit() {
   editLoading.value = true
   try {
+    const newCover = await uploadCoverIfNeeded()
+
     await updateBeat(editForm.value.id, {
       title: editForm.value.title,
       producer: editForm.value.producer,
       bpm: editForm.value.bpm,
       key: editForm.value.key,
       genre: editForm.value.genre,
-      is_free: editForm.value.is_free ? 1 : 0
+      is_free: editForm.value.is_free ? 1 : 0,
+      cover_image: newCover === undefined ? undefined : newCover
     })
+
+    // 立即更新本地列表中对应 beat 的封面预览，不依赖列表重新拉取
+    if (editingBeat) {
+      if (newCover === null) {
+        editingBeat.cover_image = null
+      } else if (newCover) {
+        editingBeat.cover_image = newCover
+      }
+    }
+
     closeEdit()
     await loadBeats()
   } catch (err: any) {
@@ -258,6 +413,49 @@ function handleClearDemoBeats() {
                 <input v-model="editForm.is_free" type="checkbox" />
                 <span class="toggle-slider"></span>
               </label>
+            </div>
+
+            <div class="form-item form-item-full">
+              <label>封面图片</label>
+              <div
+                class="cover-uploader"
+                :class="{ 'drag-over': coverDragOver, 'has-cover': hasCoverSelected }"
+                @dragover="onCoverDragOver"
+                @dragleave="onCoverDragLeave"
+                @drop="onCoverDrop"
+                @click="triggerCoverInput"
+              >
+                <img v-if="currentCoverUrl" :src="currentCoverUrl" class="cover-preview" alt="封面预览" />
+                <div v-else class="cover-placeholder">
+                  <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="9" cy="9" r="2" />
+                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                  </svg>
+                  <p class="cover-hint">点击或拖拽图片到此处上传</p>
+                </div>
+                <input
+                  ref="coverFileInput"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  class="cover-file-input"
+                  @change="onCoverInputChange"
+                />
+                <div class="cover-actions">
+                  <span class="cover-tip">支持 JPG / PNG / WEBP，最大 5MB</span>
+                  <button type="button" class="btn-link" @click.stop="triggerCoverInput">
+                    {{ hasCoverSelected ? '更换' : '选择图片' }}
+                  </button>
+                  <button v-if="hasCoverSelected" type="button" class="btn-link btn-link-danger" @click.stop="removeCover">
+                    移除
+                  </button>
+                </div>
+                <div v-if="coverUploading" class="cover-progress">
+                  <div class="cover-progress-bar" :style="{ width: coverProgress + '%' }"></div>
+                  <span>{{ coverProgress }}%</span>
+                </div>
+                <p v-if="coverUploadError" class="cover-error">{{ coverUploadError }}</p>
+              </div>
             </div>
           </div>
           <div class="modal-actions">
@@ -583,5 +781,137 @@ function handleClearDemoBeats() {
 
 .btn-confirm:hover {
   background: #9333ea;
+}
+
+/* Cover uploader (inside edit modal) */
+.form-item-full {
+  grid-column: 1 / -1;
+}
+
+.cover-uploader {
+  position: relative;
+  background: #141425;
+  border: 2px dashed #2a2a45;
+  border-radius: 10px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-height: 140px;
+}
+
+.cover-uploader:hover {
+  border-color: #7c3aed;
+  background: #181830;
+}
+
+.cover-uploader.drag-over {
+  border-color: #7c3aed;
+  background: rgba(124, 58, 237, 0.08);
+}
+
+.cover-uploader.has-cover {
+  padding: 12px;
+}
+
+.cover-file-input {
+  display: none;
+}
+
+.cover-preview {
+  max-width: 100%;
+  max-height: 180px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.cover-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: #666;
+  padding: 16px 0;
+}
+
+.cover-placeholder svg {
+  color: #555;
+}
+
+.cover-hint {
+  margin: 0;
+  font-size: 13px;
+  color: #666;
+}
+
+.cover-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.cover-tip {
+  font-size: 12px;
+  color: #666;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #7c3aed;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.btn-link:hover {
+  color: #9333ea;
+  text-decoration: underline;
+}
+
+.btn-link-danger {
+  color: #f87171;
+}
+
+.btn-link-danger:hover {
+  color: #ef4444;
+}
+
+.cover-progress {
+  width: 100%;
+  height: 4px;
+  background: #2a2a45;
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.cover-progress-bar {
+  height: 100%;
+  background: #7c3aed;
+  transition: width 0.2s;
+}
+
+.cover-progress span {
+  position: absolute;
+  right: 0;
+  top: -18px;
+  font-size: 11px;
+  color: #a0a0b0;
+}
+
+.cover-error {
+  margin: 0;
+  font-size: 12px;
+  color: #f87171;
+  text-align: center;
 }
 </style>
