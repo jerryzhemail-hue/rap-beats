@@ -204,7 +204,7 @@ deploy_remote() {
     log "在服务器上构建..."
     ssh "${SERVER_USER}@${SERVER_HOST}" "
         cd ${SERVER_DEPLOY_DIR}
-        docker compose build --pull server client
+        docker compose build --pull server client bpm
     "
 
     # 4. 重启服务

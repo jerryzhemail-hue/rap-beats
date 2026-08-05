@@ -26,6 +26,26 @@ services:
       start_period: 30s
 
   # ============================================================
+  # BPM Sidecar — Python + librosa v5
+  # Handles accurate BPM/key detection for rap beats.
+  # Falls back to JS detector in server if this container is unavailable.
+  # ============================================================
+  bpm:
+    build:
+      context: .
+      dockerfile: Dockerfile.bpm
+    container_name: rap-beats-bpm
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5050/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - rap-beats-net
+
+  # ============================================================
   # 后端 API 服务
   # ============================================================
   server:
@@ -45,6 +65,8 @@ services:
       DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
       DB_NAME: ${DB_NAME:-rap_beats}
       FORUM_DB_NAME: ${FORUM_DB_NAME:-rap_beats_forum}
+      # BPM Sidecar — librosa v5
+      BPM_SIDECAR_URL: http://rap-beats-bpm:5050
       # JWT
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       # 虎皮椒支付
@@ -67,6 +89,8 @@ services:
       OSS_AVATAR_PREFIX: ${OSS_AVATAR_PREFIX:-avatars}
     depends_on:
       mysql:
+        condition: service_healthy
+      bpm:
         condition: service_healthy
     networks:
       - rap-beats-net

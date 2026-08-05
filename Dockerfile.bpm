@@ -1,0 +1,29 @@
+# BPM sidecar — Python 3.12 + librosa
+# Separated from main server to keep Node Alpine image clean.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install audio decoding libs needed by ffmpeg (for soundfile / librosa via audioread)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libsndfile1 \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY bpm_service/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY bpm_service/server.py ./
+
+# Non-root user
+RUN useradd -m -u 1001 bpmuser
+USER bpmuser
+
+EXPOSE 5050
+
+ENV PORT=5050
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5050/health')" || exit 1
+
+CMD ["python", "server.py"]
