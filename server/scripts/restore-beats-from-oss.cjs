@@ -15,7 +15,9 @@
  *     设置环境变量 RESTORE_DELETE_EXISTING=1
  *
  * 环境变量（容器内已具备）：DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME、
- *   OSS_REGION/OSS_BUCKET/OSS_ACCESS_KEY_ID/OSS_ACCESS_KEY_SECRET/OSS_ENDPOINT/OSS_PUBLIC_BASE_URL
+ *   OSS_REGION/OSS_BUCKET/OSS_ACCESS_KEY_ID/OSS_ACCESS_KEY_SECRET/OSS_ENDPOINT/OSS_PUBLIC_BASE_URL、
+ *   OSS_AUDIO_PREFIX/OSS_COVER_PREFIX（目录前缀隔离，本地开发用 dev/audio、dev/covers）、
+ *   UPLOADED_BY（上传者用户 id，默认 4，本地可按实际用户调整）
  */
 
 const mysql = require('mysql2/promise');
@@ -27,6 +29,10 @@ const mm = require('music-metadata');
 const MAIN = process.env.DB_NAME || 'rap_beats';
 const BASE = process.env.OSS_PUBLIC_BASE_URL;
 const DELETE_EXISTING = process.env.RESTORE_DELETE_EXISTING === '1';
+const UPLOADED_BY = Number(process.env.UPLOADED_BY || 4);
+// 支持 OSS 目录前缀隔离（本地开发用 dev/ 前缀，默认保持线上根目录行为）
+const AUDIO_PREFIX = (process.env.OSS_AUDIO_PREFIX || 'audio').replace(/^\/+|\/+$/g, '');
+const COVER_PREFIX = (process.env.OSS_COVER_PREFIX || 'covers').replace(/^\/+|\/+$/g, '');
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -80,8 +86,8 @@ async function main() {
     charset: 'utf8mb4'
   });
 
-  const audios = (await listAll(client, 'audio/')).filter((o) => parseTs(o.name));
-  const covers = (await listAll(client, 'covers/')).filter((o) => parseTs(o.name));
+  const audios = (await listAll(client, `${AUDIO_PREFIX}/`)).filter((o) => parseTs(o.name));
+  const covers = (await listAll(client, `${COVER_PREFIX}/`)).filter((o) => parseTs(o.name));
   console.log(`[oss] audio=${audios.length} 个, cover=${covers.length} 个`);
   if (audios.length === 0) {
     console.log('[oss] 没有可恢复的音频，退出');
@@ -133,7 +139,7 @@ async function main() {
           (title, producer, rapper, bpm, \`key\`, genre, tags, duration, file_path, cover_image,
            download_count, is_free, is_vip_only, uploaded_by)
          VALUES (?, ?, NULL, ?, ?, ?, '[]', ?, ?, ?, 0, 0, 0, ?)`,
-        [title, producer, bpm, '', genre, duration, audioUrl, coverUrl, 4]
+        [title, producer, bpm, '', genre, duration, audioUrl, coverUrl, UPLOADED_BY]
       );
       inserted++;
       console.log(`  [ok] ${title} | ${producer} | ${duration}s | cover=${p.cover ? 'Y' : 'N'}`);

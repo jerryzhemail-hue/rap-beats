@@ -16,6 +16,12 @@ const GENRES = ['Trap', 'Drill', 'Boom Bap', 'Lo-fi', 'R&B', 'Old School', 'Melo
 const KEYS = ['Am', 'Em', 'Fm', 'Gm', 'Cm', 'Dm', 'Bbm', 'Abm'];
 const RAPPER_NAMES = ['热狗 MC HotDog', 'PG One', 'GAI', 'Bridge', 'TT', 'Jony J', 'VAVA', '艾热'];
 
+// OSS dev/ 前缀资源（与 server/.env 的 OSS_*_PREFIX 隔离配置一致，仅指向 dev/ 副本）
+const DEV_OSS_BASE = 'https://mymusic-site.oss-cn-beijing.aliyuncs.com/dev';
+const DEV_COVER = `${DEV_OSS_BASE}/covers/cover-1784336082475-963572005.jpg`;
+const DEV_AUDIO = `${DEV_OSS_BASE}/audio/audio-1784336082473-43774292.mp3`;
+const DEV_BANNER = `${DEV_OSS_BASE}/covers/cover-1784348395186-672321346.jpg`;
+
 const USER_PASSWORD = 'Test@123456';
 const ADMIN_PASSWORD = 'Admin@123456';
 
@@ -46,6 +52,15 @@ async function main() {
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'rap_beats_dev',
+    charset: 'utf8mb4',
+  });
+  // 论坛数据在独立论坛库（FORUM_DB_NAME），与主库分离
+  const forumConn = await mysql.createConnection({
+    host: process.env.FORUM_DB_HOST || process.env.DB_HOST || '127.0.0.1',
+    port: Number(process.env.FORUM_DB_PORT || process.env.DB_PORT || '3306'),
+    user: process.env.FORUM_DB_USER || process.env.DB_USER || 'root',
+    password: process.env.FORUM_DB_PASSWORD || process.env.DB_PASSWORD || '',
+    database: process.env.FORUM_DB_NAME || 'rap_beats_forum_dev',
     charset: 'utf8mb4',
   });
 
@@ -101,11 +116,20 @@ async function main() {
   }
   console.log(`  - 已更新 ${updated} 条 beat（曲风/BPM/调性/时长/免费/VIP/rapper）`);
 
+  console.log('== 2.5/5 确保 Rapper 存在 ==');
+  for (const name of RAPPER_NAMES) {
+    await conn.execute(
+      `INSERT IGNORE INTO rappers (name, bio, sort_order) VALUES (?, ?, 0)`,
+      [name, '种子数据 Rapper']
+    );
+  }
+  console.log(`  - 已确认 ${RAPPER_NAMES.length} 个 Rapper`);
+
   console.log('== 3/5 播种论坛积分与签到 ==');
   for (const [name, points] of Object.entries(POINTS)) {
     const uid = userIds[name];
     if (!uid) continue;
-    await conn.execute(
+    await forumConn.execute(
       `INSERT INTO forum_user_points (user_id, total_points) VALUES (?, ?)
        ON DUPLICATE KEY UPDATE total_points = VALUES(total_points)`,
       [uid, points]
@@ -116,7 +140,7 @@ async function main() {
   for (const daysAgo of [1, 2]) {
     const d = new Date(Date.now() - daysAgo * 86400000);
     const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    await conn.execute(
+    await forumConn.execute(
       `INSERT IGNORE INTO forum_sign_ins (user_id, sign_date, points) VALUES (?, ?, 1)`,
       [tf, dateStr]
     );
@@ -151,7 +175,7 @@ async function main() {
       title: '【测试数据】Trap 伴奏创作思路分享',
       content: '这是一条种子数据帖子：聊聊 Trap 编曲里 808 与 hi-hat 的节奏组合，欢迎测试人员点评交流。',
       category_id: 1,
-      images: '["https://mymusic-site.oss-cn-beijing.aliyuncs.com/forum-images/forum_image-1785845782795-199152000.png"]',
+      images: JSON.stringify([DEV_COVER]),
       music_file: null,
       music_title: null,
       music_artist: null,
@@ -164,7 +188,7 @@ async function main() {
       content: '带音频的赏析帖：分析经典热单的编曲鼓点、副歌记忆点与现场氛围，配有测试音频。',
       category_id: 4,
       images: '[]',
-      music_file: 'https://mymusic-site.oss-cn-beijing.aliyuncs.com/forum-audio/forum_audio-1785845784708-465091322.mp3',
+      music_file: DEV_AUDIO,
       music_title: '测试赏析音频',
       music_artist: 'tester_free',
       music_genre: 'Trap',
@@ -185,7 +209,7 @@ async function main() {
     },
   ];
   for (const p of posts) {
-    await conn.execute(
+    await forumConn.execute(
       `INSERT INTO forum_posts (user_id, category_id, title, content, images, music_file, music_title, music_artist, music_genre, music_bpm, music_cover_image, topic_ids, status)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'published'
        FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM forum_posts WHERE title = ?)`,
@@ -194,7 +218,17 @@ async function main() {
   }
   console.log('  - 3 条带内容/媒体的帖子已创建');
 
+  console.log('== 5.5/5 创建公开 Banner（dev/ 资源） ==');
+  await conn.execute(
+    `INSERT INTO banners (name, image_url, link_url, sort_order, is_active, overlay_opacity, display_duration)
+     SELECT ?, ?, ?, 0, 1, 0.35, 5
+     FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM banners WHERE name = ?)`,
+    ['【测试数据】首页 Banner（dev OSS）', DEV_BANNER, 'https://example.com/beats', '【测试数据】首页 Banner（dev OSS）']
+  );
+  console.log('  - Banner 已创建');
+
   await conn.end();
+  await forumConn.end();
   console.log('\n种子数据完成 ✅');
   console.log('测试账号密码：普通用户统一 Test@123456，管理员 Admin@123456');
 }

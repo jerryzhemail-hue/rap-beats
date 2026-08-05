@@ -9,6 +9,8 @@
  */
 import { execFileSync } from 'child_process';
 import fs from 'fs';
+import 'dotenv/config';
+import mysql from 'mysql2/promise';
 
 const BASE = 'http://127.0.0.1:3000/api';
 const TMP = '/tmp/api-full-test-assets';
@@ -88,10 +90,40 @@ async function req(method, path, opts = {}) {
 const get = (p, o) => req('GET', p, o);
 const post = (p, o) => req('POST', p, o);
 const put = (p, o) => req('PUT', p, o);
+const patch = (p, o) => req('PATCH', p, o);
 const del = (p, o) => req('DELETE', p, o);
 
 function expect(status, allowed = [status]) {
   return { ok: allowed.includes(status), detail: `期望 ${allowed.join('/')}，实际 ${status}` };
+}
+
+// OSS 模式下下载是 302 签名直链；local 模式下是 200 附件流
+function assertDownloadOk(r) {
+  if (r.status === 200 && (r.headers.get('content-type') || '').includes('audio')) {
+    return { ok: true, detail: 'local 附件流' };
+  }
+  if (r.status === 302 && (r.headers.get('location') || '').includes('/dev/audio/')) {
+    return { ok: true, detail: 'OSS 302 签名直链(dev/audio)' };
+  }
+  return { ok: false, detail: `status=${r.status}, location=${r.headers.get('location') || ''}` };
+}
+
+// OSS 模式下 stream 是代理(206+X-Preview)或 302 完整流
+function assertStreamOk(r, previewExpected) {
+  const ct = r.headers.get('content-type') || '';
+  const preview = r.headers.get('x-preview') === 'true';
+  if (previewExpected) {
+    return preview && (ct.includes('audio') || r.status === 206)
+      ? { ok: true, detail: `status=${r.status}, X-Preview=true` }
+      : { ok: false, detail: `status=${r.status}, ct=${ct}, X-Preview=${r.headers.get('x-preview')}` };
+  }
+  if (r.status === 302 && (r.headers.get('location') || '').includes('/dev/audio/')) {
+    return { ok: true, detail: 'OSS 302 完整流' };
+  }
+  if (!preview && (ct.includes('audio') || r.status === 206)) {
+    return { ok: true, detail: `status=${r.status}` };
+  }
+  return { ok: false, detail: `status=${r.status}, ct=${ct}, X-Preview=${r.headers.get('x-preview')}` };
 }
 
 function pick(obj, keys) {
@@ -114,6 +146,29 @@ async function login(username, password) {
   return r.body?.token || null;
 }
 
+// ─── 本地 dev 库直连（用于幂等复位测试前置状态） ─────────────────────────────
+async function devDb() {
+  return mysql.createConnection({
+    host: process.env.DB_HOST || '127.0.0.1',
+    port: Number(process.env.DB_PORT || '3306'),
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'rap_beats_dev',
+    charset: 'utf8mb4',
+  });
+}
+
+async function forumDb() {
+  return mysql.createConnection({
+    host: process.env.FORUM_DB_HOST || process.env.DB_HOST || '127.0.0.1',
+    port: Number(process.env.FORUM_DB_PORT || process.env.DB_PORT || '3306'),
+    user: process.env.FORUM_DB_USER || process.env.DB_USER || 'root',
+    password: process.env.FORUM_DB_PASSWORD || process.env.DB_PASSWORD || '',
+    database: process.env.FORUM_DB_NAME || 'rap_beats_forum_dev',
+    charset: 'utf8mb4',
+  });
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 async function main() {
   const S = {}; // 共享状态
@@ -129,6 +184,11 @@ async function main() {
   };
 
   section('A. 认证');
+  await test('GET /health 健康检查', async () => {
+    const r = await get('/health');
+    return r.status === 200 && r.body?.status === 'ok' && r.body?.services?.database?.status === 'ok'
+      ? { ok: true } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
+  });
   await test('未带 token 访问 /auth/me 应 401', async () => {
     const r = await get('/auth/me');
     return expect(r.status, [401]);
@@ -176,8 +236,9 @@ async function main() {
     const list = pick(r.body, ['beats', 'list', 'items']);
     S.freeBeatId = (list || []).find(b => b.is_free === 1 && b.id !== 33)?.id || list?.[0]?.id;
     S.otherBeatId = (list || []).find(b => b.id !== S.freeBeatId)?.id;
-    return r.status === 200 && Array.isArray(list) && list.length > 0
-      ? { ok: true, detail: `total=${r.body?.total}, 第一条=${list[0]?.title}` }
+    const ossOk = (list || []).every(b => (b.file_path || '').includes('/dev/audio/'));
+    return r.status === 200 && Array.isArray(list) && list.length > 0 && ossOk
+      ? { ok: true, detail: `total=${r.body?.total}, 第一条=${list[0]?.title}, OSS=dev/audio` }
       : { ok: false, detail: `status=${r.status}` };
   });
 
@@ -228,14 +289,26 @@ async function main() {
     const check = await get('/preview/check');
     const cookie = check.cookie;
     const r = await get(`/beats/${S.freeBeatId}/stream`, { cookie });
-    return r.status === 200 && r.headers.get('content-type')?.includes('audio')
-      ? { ok: true, detail: `X-Preview=${r.headers.get('x-preview')}` }
-      : { ok: false, detail: `status=${r.status}, ct=${r.headers.get('content-type')}` };
+    return assertStreamOk(r, true);
   });
 
   section('C. Beat 鉴权/VIP/下载');
+  // 复位 tester_premium 今日下载记录，避免多轮运行累计命中 30 次/天上限
+  {
+    const dbc = await devDb();
+    const [pr] = await dbc.query('SELECT id FROM users WHERE username = ?', ['tester_premium']);
+    if (pr[0]?.id) await dbc.query('DELETE FROM downloads WHERE user_id = ? AND created_at >= CURDATE()', [pr[0].id]);
+    await dbc.end();
+  }
   await test('免费用户未同意协议下载应 403 (LICENSE)', async () => {
     if (!S.otherBeatId) return { ok: false, detail: '没有第二个 beat 可测' };
+    // 清除历史运行残留的协议同意记录，保证「未同意」状态可重复验证
+    const dbc = await devDb();
+    const [fr] = await dbc.query('SELECT id FROM users WHERE username = ?', ['tester_free']);
+    if (fr[0]?.id) {
+      await dbc.query('DELETE FROM beat_license_agreements WHERE user_id = ? AND beat_id = ?', [fr[0].id, S.otherBeatId]);
+    }
+    await dbc.end();
     const r = await get(`/beats/${S.otherBeatId}/download`, { token: S.tok_free });
     return r.status === 403 && r.body?.code === 'LICENSE_AGREEMENT_REQUIRED'
       ? { ok: true } : { ok: false, detail: `status=${r.status}, code=${r.body?.code}` };
@@ -247,28 +320,37 @@ async function main() {
   });
 
   await test('免费用户下载免费 beat 应 403 (需要会员/积分)', async () => {
+    // 复位今日下载记录与未使用权限，避免受前序用例（每日 5 次上限）残留影响
+    const dbc = await devDb();
+    const [fr] = await dbc.query('SELECT id FROM users WHERE username = ?', ['tester_free']);
+    if (fr[0]?.id) {
+      await dbc.query('DELETE FROM downloads WHERE user_id = ? AND created_at >= CURDATE()', [fr[0].id]);
+    }
+    await dbc.end();
+    const fdbc = await forumDb();
+    if (fr[0]?.id) {
+      await fdbc.query('DELETE FROM forum_point_download_permissions WHERE user_id = ? AND used = 0', [fr[0].id]);
+    }
+    await fdbc.end();
     const r = await get(`/beats/${S.freeBeatId}/download`, { token: S.tok_free });
     return r.status === 403 && r.body?.code === 'DOWNLOAD_REQUIRES_VIP'
       ? { ok: true, detail: r.body?.hint } : { ok: false, detail: `status=${r.status}, code=${r.body?.code}` };
   });
 
-  await test('会员下载免费 beat 成功（附件响应）', async () => {
+  await test('会员下载免费 beat 成功（OSS 302 签名直链）', async () => {
     await post(`/beats/${S.freeBeatId}/license/agree`, { token: S.tok_premium, json: {} });
     const r = await get(`/beats/${S.freeBeatId}/download`, { token: S.tok_premium });
-    return r.status === 200 && r.headers.get('content-type')?.includes('audio')
-      ? { ok: true } : { ok: false, detail: `status=${r.status}, ct=${r.headers.get('content-type')}` };
+    return assertDownloadOk(r);
   });
 
   await test('免费用户 stream 应返回预览（X-Preview）', async () => {
     const r = await get(`/beats/${S.freeBeatId}/stream`, { token: S.tok_free });
-    return r.status === 200 && r.headers.get('x-preview') === 'true'
-      ? { ok: true } : { ok: false, detail: `status=${r.status}, X-Preview=${r.headers.get('x-preview')}` };
+    return assertStreamOk(r, true);
   });
 
   await test('会员 stream 返回完整文件', async () => {
     const r = await get(`/beats/${S.freeBeatId}/stream`, { token: S.tok_premium });
-    return r.status === 200 && r.headers.get('x-preview') !== 'true'
-      ? { ok: true } : { ok: false, detail: `status=${r.status}, X-Preview=${r.headers.get('x-preview')}` };
+    return assertStreamOk(r, false);
   });
 
   await test('VIP 专属 beat：免费用户 stream 应 403 (VIP_ONLY)', async () => {
@@ -280,18 +362,24 @@ async function main() {
     return r.status === 403 && r.body?.code === 'VIP_ONLY'
       ? { ok: true, detail: `required=${r.body?.required_level}` } : { ok: false, detail: `status=${r.status}, code=${r.body?.code}` };
   });
+  await test('VIP 专属 beat：免费用户详情应 403 (VIP_ONLY)', async () => {
+    if (!S.vipBeatId) return { ok: false, detail: '无 VIP beat' };
+    const r = await get(`/beats/${S.vipBeatId}`, { token: S.tok_free });
+    return r.status === 403 && r.body?.code === 'VIP_ONLY'
+      ? { ok: true, detail: `required=${r.body?.required_level}` } : { ok: false, detail: `status=${r.status}, code=${r.body?.code}` };
+  });
 
   await test('VIP 专属 beat：会员 stream 成功', async () => {
     if (!S.vipBeatId) return { ok: false, detail: '无 VIP beat' };
     const r = await get(`/beats/${S.vipBeatId}/stream`, { token: S.tok_premium });
-    return expect(r.status, [200]);
+    return assertStreamOk(r, false);
   });
 
   await test('VIP 专属 beat：会员下载成功', async () => {
     if (!S.vipBeatId) return { ok: false, detail: '无 VIP beat' };
     await post(`/beats/${S.vipBeatId}/license/agree`, { token: S.tok_premium, json: {} });
     const r = await get(`/beats/${S.vipBeatId}/download`, { token: S.tok_premium });
-    return expect(r.status, [200]);
+    return assertDownloadOk(r);
   });
 
   await test('POST /beats/:id/play-events 播放事件', async () => {
@@ -365,6 +453,19 @@ async function main() {
     return r.status === 200 && r.body?.is_guest === false
       ? { ok: true } : { ok: false, detail: `status=${r.status}, is_guest=${r.body?.is_guest}` };
   });
+  await test('游客试听第 3 次后第 4 次应 403 (GUEST_LIMIT_REACHED)', async () => {
+    // 全新会话：3 次成功，第 4 次拒绝
+    const check = await get('/preview/check');
+    const cookie = check.cookie;
+    for (let i = 0; i < 3; i++) {
+      const r = await post('/preview/play', { cookie, json: { beat_id: S.freeBeatId } });
+      if (r.status !== 200) return { ok: false, detail: `第 ${i + 1} 次试听 status=${r.status}` };
+    }
+    const blocked = await post('/preview/play', { cookie, json: { beat_id: S.freeBeatId } });
+    return blocked.status === 403 && blocked.body?.code === 'GUEST_LIMIT_REACHED'
+      ? { ok: true, detail: `${blocked.body.used}/${blocked.body.limit}` }
+      : { ok: false, detail: `status=${blocked.status}, code=${blocked.body?.code}, body=${blocked.text.slice(0, 120)}` };
+  });
 
   section('G. 用户中心');
   await test('GET /user/vip-status 免费用户', async () => {
@@ -402,8 +503,16 @@ async function main() {
       ? { ok: true } : { ok: false, detail: `status=${r.status}` };
   });
   await test('POST /user/avatar/direct 直传头像', async () => {
-    const r = await post('/user/avatar/direct', { token: S.tok_free, json: { avatar_url: 'https://mymusic-site.oss-cn-beijing.aliyuncs.com/avatars/avatar-test.png' } });
-    return expect(r.status, [200]);
+    const r = await post('/user/avatar/direct', { token: S.tok_free, json: { avatar_url: 'https://mymusic-site.oss-cn-beijing.aliyuncs.com/dev/avatars/avatar-test.png' } });
+    const url = r.body?.user?.avatar_url || '';
+    return r.status === 200 && url.includes('/dev/avatars/')
+      ? { ok: true, detail: 'dev/avatars' } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 120)}` };
+  });
+  await test('POST /user/avatar/upload-target 直传目标（OSS dev/avatars）', async () => {
+    const r = await post('/user/avatar/upload-target', { token: S.tok_free, json: { file: { name: 'a.png', type: 'image/png' } } });
+    const url = r.body?.target?.uploadUrl || '';
+    return r.status === 200 && r.body?.direct_upload === true && url.includes('/dev/avatars/')
+      ? { ok: true, detail: 'dev/avatars' } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
   });
   await test('DELETE /user/avatar 恢复默认', async () => {
     const r = await del('/user/avatar', { token: S.tok_free });
@@ -445,7 +554,10 @@ async function main() {
     return expect(r.status, [200]);
   });
   await test('GET /forum/posts/:id 帖子详情', async () => {
-    const r = await get('/forum/posts/1');
+    const list = await get('/forum/posts?page=1&pageSize=1');
+    const first = pick(list.body, ['posts', 'list', 'data'])?.[0];
+    if (!first) return { ok: false, detail: '无帖子' };
+    const r = await get(`/forum/posts/${first.id ?? first.post_id}`);
     return r.status === 200 && !!r.body?.post?.title
       ? { ok: true, detail: r.body.post.title } : { ok: false, detail: `status=${r.status}` };
   });
@@ -458,7 +570,7 @@ async function main() {
         title: '【自动化测试】全量接口测试帖',
         content: '这是自动化测试套件创建的帖子，用于验证论坛发帖、点赞、收藏、评论、置顶、加精等完整流程。',
         category_id: 1,
-        images: ['https://mymusic-site.oss-cn-beijing.aliyuncs.com/forum-images/forum_image-1785845782795-199152000.png'],
+        images: ['https://mymusic-site.oss-cn-beijing.aliyuncs.com/dev/covers/cover-1784336082475-963572005.jpg'],
       }
     });
     S.testPostId = r.body?.post_id ?? r.body?.id;
@@ -468,6 +580,24 @@ async function main() {
   await test('POST /forum/posts 缺标题应 400', async () => {
     const r = await post('/forum/posts', { token: S.tok_free, json: { content: '没有标题的内容', category_id: 1 } });
     return expect(r.status, [400]);
+  });
+  await test('发帖 XSS 过滤（标题转义、正文白名单）', async () => {
+    const r = await post('/forum/posts', {
+      token: S.tok_free,
+      json: {
+        title: '<script>alert(1)</script>安全测试帖',
+        content: '<b>加粗保留</b><script>alert(2)</script><img src=x onerror=alert(3)>',
+        category_id: 1,
+      }
+    });
+    const postId = r.body?.post_id ?? r.body?.id;
+    if (r.status !== 200 || !postId) return { ok: false, detail: `status=${r.status}` };
+    const detail = await get(`/forum/posts/${postId}`);
+    const title = detail.body?.post?.title || '';
+    const content = detail.body?.post?.content || '';
+    const cleaned = !title.includes('<script') && !content.includes('<script') && !content.includes('onerror');
+    await del(`/forum/posts/${postId}`, { token: S.tok_admin });
+    return cleaned ? { ok: true, detail: 'script/onerror 已过滤' } : { ok: false, detail: `title=${title.slice(0, 60)}, content=${content.slice(0, 80)}` };
   });
   await test('PUT /forum/posts/:id 作者可修改', async () => {
     const r = await put(`/forum/posts/${S.testPostId}`, { token: S.tok_free, json: { title: '【自动化测试】全量接口测试帖(已修改)', content: '修改后的内容', category_id: 1 } });
@@ -564,10 +694,55 @@ async function main() {
   });
   await test('POST /forum/lottery 抽奖', async () => {
     const r = await post('/forum/lottery', { token: S.tok_points, json: {} });
+    // 重复运行同一天次数可能已用完：403 LOTTERY_DAILY_LIMIT_REACHED 也视为符合预期
+    if (r.status === 403 && r.body?.code === 'LOTTERY_DAILY_LIMIT_REACHED') {
+      return { ok: true, detail: '今日次数已用完（符合预期）' };
+    }
     return r.status === 200 && (r.body?.prize?.name || r.body?.message)
-      ? { ok: true, detail: r.body?.prize?.name ? `奖品=${r.body.prize.name}` : undefined } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 120)}` };
+      ? { ok: true, detail: r.body?.prize?.name ? `奖品=${r.body.prize.name}, 剩余=${r.body.remaining_chances}` : undefined }
+      : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 120)}` };
+  });
+  await test('抽奖每日次数：config/status 按等级返回且联动一致', async () => {
+    const cfg = await get('/forum/points/config', { token: S.tok_points });
+    const st = await get('/forum/lottery/status', { token: S.tok_points });
+    const daily = cfg.body?.lottery?.daily_chances;
+    const stDaily = st.body?.daily_chances;
+    const used = st.body?.used_today ?? 0;
+    const remaining = st.body?.remaining_chances ?? 0;
+    const valid = [1, 2, 3, 5].includes(daily) && daily === stDaily && remaining === Math.max(0, daily - used);
+    return valid
+      ? { ok: true, detail: `daily=${daily}, used=${used}, remaining=${remaining}` }
+      : { ok: false, detail: `config=${daily}, status.daily=${stDaily}, used=${used}, remaining=${remaining}` };
+  });
+  await test('抽奖超过每日次数应 403 (LOTTERY_DAILY_LIMIT_REACHED)', async () => {
+    const st = await get('/forum/lottery/status', { token: S.tok_free });
+    const remaining = st.body?.remaining_chances ?? 0;
+    if (remaining <= 0) {
+      return { ok: true, detail: '今日次数已用完（符合预期）' };
+    }
+    // 抽完剩余次数，第 remaining+1 次应被拒绝
+    for (let i = 0; i < remaining; i++) {
+      const r = await post('/forum/lottery', { token: S.tok_free, json: {} });
+      if (r.status !== 200) return { ok: false, detail: `第 ${i + 1} 次抽奖 status=${r.status}` };
+    }
+    const blocked = await post('/forum/lottery', { token: S.tok_free, json: {} });
+    return blocked.status === 403 && blocked.body?.code === 'LOTTERY_DAILY_LIMIT_REACHED'
+      ? { ok: true, detail: `${blocked.body.used}/${blocked.body.daily_chances}` }
+      : { ok: false, detail: `status=${blocked.status}, code=${blocked.body?.code}, body=${blocked.text.slice(0, 120)}` };
   });
   await test('POST /forum/points/exchange 积分兑换会员', async () => {
+    // 复位积分，避免历史运行扣分导致余额不足（可重复运行）
+    const dbc = await devDb();
+    const fdbc = await forumDb();
+    const [pr] = await dbc.query('SELECT id FROM users WHERE username = ?', ['tester_points']);
+    if (pr[0]?.id) {
+      await fdbc.query(
+        'INSERT INTO forum_user_points (user_id, total_points) VALUES (?, 3000) ON DUPLICATE KEY UPDATE total_points = 3000',
+        [pr[0].id]
+      );
+    }
+    await dbc.end();
+    await fdbc.end();
     const r = await post('/forum/points/exchange', { token: S.tok_points, json: { level: 'basic' } });
     return r.status === 200 && r.body?.success === true
       ? { ok: true, detail: `vip=${r.body.vip_level}, 剩余=${r.body.total_points}` } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
@@ -583,10 +758,27 @@ async function main() {
       ? { ok: true, detail: `permissions=${r.body.remaining_permissions}` } : { ok: false, detail: `status=${r.status}` };
   });
   await test('积分兑换下载权限后免费用户可下载', async () => {
+    // 用真正的免费用户 tester_free，并复位今日下载/未使用权限/积分，保证可重复运行
+    const dbc = await devDb();
+    const [fr] = await dbc.query('SELECT id FROM users WHERE username = ?', ['tester_free']);
+    const fuid = fr[0]?.id;
+    if (fuid) await dbc.query('DELETE FROM downloads WHERE user_id = ? AND created_at >= CURDATE()', [fuid]);
+    await dbc.end();
+    const fdbc = await forumDb();
+    if (fuid) {
+      await fdbc.query('DELETE FROM forum_point_download_permissions WHERE user_id = ? AND used = 0', [fuid]);
+      await fdbc.query(
+        'INSERT INTO forum_user_points (user_id, total_points) VALUES (?, 100) ON DUPLICATE KEY UPDATE total_points = 100',
+        [fuid]
+      );
+    }
+    await fdbc.end();
     const beat = S.freeBeatId;
-    await post(`/beats/${beat}/license/agree`, { token: S.tok_points, json: {} });
-    const r = await get(`/beats/${beat}/download`, { token: S.tok_points });
-    return expect(r.status, [200]);
+    await post(`/beats/${beat}/license/agree`, { token: S.tok_free, json: {} });
+    const ex = await post('/forum/points/exchange-download', { token: S.tok_free, json: {} });
+    if (ex.status !== 200) return { ok: false, detail: `兑换权限失败 status=${ex.status}, body=${ex.text.slice(0, 120)}` };
+    const r = await get(`/beats/${beat}/download`, { token: S.tok_free });
+    return assertDownloadOk(r);
   });
   await test('GET /forum/points/config 登录态', async () => {
     const r = await get('/forum/points/config', { token: S.tok_free });
@@ -594,10 +786,32 @@ async function main() {
   });
 
   section('K. 论坛：上传');
-  await test('POST /forum/upload-target 直传目标（local 返回 false）', async () => {
+  await test('POST /forum/upload-target 直传目标（OSS dev/forum-images 前缀）', async () => {
     const r = await post('/forum/upload-target', { token: S.tok_free, json: { file: { name: 'x.png', type: 'image/png' } } });
-    return r.status === 200 && r.body?.direct_upload === false
-      ? { ok: true } : { ok: false, detail: `status=${r.status}` };
+    const url = r.body?.target?.uploadUrl || '';
+    return r.status === 200 && r.body?.direct_upload === true && url.includes('/dev/forum-images/')
+      ? { ok: true, detail: 'dev/forum-images' } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
+  });
+  await test('真实 OSS 直传 PUT：签名 URL 上传后公开 URL 可读', async () => {
+    const r = await post('/forum/upload-target', { token: S.tok_free, json: { file: { name: 'direct-test.png', type: 'image/png' } } });
+    const target = r.body?.target;
+    if (!target?.uploadUrl || !target?.publicUrl) return { ok: false, detail: '未拿到直传目标' };
+    const putRes = await fetch(target.uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': target.headers?.['Content-Type'] || 'image/png' },
+      body: fs.readFileSync(PNG),
+    });
+    if (!putRes.ok && putRes.status !== 200) return { ok: false, detail: `PUT status=${putRes.status}` };
+    const head = await fetch(target.publicUrl, { method: 'HEAD' });
+    const ok = head.status === 200 && target.publicUrl.includes('/dev/forum-images/');
+    return ok ? { ok: true, detail: 'PUT→HEAD 200，dev/forum-images' } : { ok: false, detail: `HEAD status=${head.status}` };
+  });
+  await test('POST /forum/upload-audio 非音频类型应 400', async () => {
+    const txt = `${TMP}/not-audio.txt`;
+    fs.writeFileSync(txt, 'hello');
+    const form = makeForm({}, { audio: { path: txt, name: 'bad.txt', type: 'text/plain' } });
+    const r = await post('/forum/upload-audio', { token: S.tok_free, form });
+    return expect(r.status, [400]);
   });
   await test('POST /forum/upload-image 上传图片', async () => {
     const form = makeForm({}, { image: { path: PNG, name: 'post.png', type: 'image/png' } });
@@ -609,8 +823,10 @@ async function main() {
     const form = makeForm({}, { audio: { path: WAV, name: 'demo.wav', type: 'audio/wav' } });
     const r = await post('/forum/upload-audio', { token: S.tok_free, form });
     S.testAudioId = r.body?.audio_id;
+    S.testAudioUrl = r.body?.audio_url;
     return r.status === 200 && !!r.body?.audio_url
-      ? { ok: true, detail: `audio_id=${S.testAudioId}` } : { ok: false, detail: `status=${r.status}` };
+      ? { ok: true, detail: `audio_id=${S.testAudioId}, OSS=${r.body.audio_url.includes('/dev/') ? 'dev/' : 'ROOT!'}` }
+      : { ok: false, detail: `status=${r.status}` };
   });
   await test('GET /forum/audio-bpm/:audioId BPM 分析结果', async () => {
     if (!S.testAudioId) return { ok: false, detail: '音频未上传' };
@@ -626,28 +842,34 @@ async function main() {
   });
 
   section('L. Banner');
-  await test('GET /banners 公开列表', async () => {
-    const r = await get('/banners');
-    const list = pick(r.body, ['banners', 'list']);
-    return r.status === 200 && Array.isArray(list) && list.length >= 1
-      ? { ok: true, detail: `${list.length} 个` } : { ok: false, detail: `status=${r.status}` };
-  });
   let bannerId;
   await test('POST /admin/banners/upload-image 上传 Banner 图', async () => {
     const form = makeForm({}, { image: { path: PNG, name: 'banner.png', type: 'image/png' } });
     const r = await post('/admin/banners/upload-image', { token: S.tok_admin, form });
     S.bannerImage = r.body?.stored_value || r.body?.image_url;
-    return r.status === 200 && !!S.bannerImage
-      ? { ok: true } : { ok: false, detail: `status=${r.status}` };
+    return r.status === 200 && !!S.bannerImage && S.bannerImage.includes('/dev/banners/')
+      ? { ok: true, detail: 'dev/banners' } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 120)}` };
+  });
+  await test('POST /admin/banners/upload-target 直传目标（OSS dev/banners）', async () => {
+    const r = await post('/admin/banners/upload-target', { token: S.tok_admin, json: { file: { name: 'b.png', type: 'image/png' } } });
+    const url = r.body?.target?.uploadUrl || '';
+    return r.status === 200 && r.body?.direct_upload === true && url.includes('/dev/banners/')
+      ? { ok: true, detail: 'dev/banners' } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
   });
   await test('POST /admin/banners 创建 Banner', async () => {
     const r = await post('/admin/banners', {
       token: S.tok_admin,
-      json: { name: '自动化测试 Banner', image_url: S.bannerImage || 'https://mymusic-site.oss-cn-beijing.aliyuncs.com/banners/banner-test.jpg', link_url: 'https://example.com', sort_order: 99, is_active: 1 }
+      json: { name: '自动化测试 Banner', image_url: S.bannerImage || 'https://mymusic-site.oss-cn-beijing.aliyuncs.com/dev/covers/cover-1784336082475-963572005.jpg', link_url: 'https://example.com', sort_order: 99, is_active: 1 }
     });
     bannerId = r.body?.banner?.id ?? r.body?.id;
     return expect(r.status, [201, 200]) && !!bannerId
       ? { ok: true, detail: `id=${bannerId}` } : { ok: false, detail: `status=${r.status}` };
+  });
+  await test('GET /banners 公开列表包含新 Banner', async () => {
+    const r = await get('/banners');
+    const list = pick(r.body, ['banners', 'list']);
+    return r.status === 200 && Array.isArray(list) && list.some(b => b.id === bannerId || b.name === '自动化测试 Banner')
+      ? { ok: true, detail: `${list.length} 个，含测试 Banner` } : { ok: false, detail: `status=${r.status}` };
   });
   await test('PUT /admin/banners/:id 更新 Banner', async () => {
     const r = await put(`/admin/banners/${bannerId}`, { token: S.tok_admin, json: { name: '自动化测试 Banner-改', is_active: 1 } });
@@ -687,8 +909,11 @@ async function main() {
       ? { ok: true } : { ok: false, detail: `status=${r.status}, ct=${r.headers.get('content-type')}` };
   });
   await test('GET /rappers/:id 详情', async () => {
-    const r = await get('/rappers/1');
-    return expect(r.status, [200]);
+    const list = (await get('/rappers')).body?.rappers || [];
+    const first = list[0];
+    if (!first) return { ok: false, detail: '无 Rapper' };
+    const r = await get(`/rappers/${first.id}`);
+    return r.status === 200 ? { ok: true, detail: first.name } : { ok: false, detail: `status=${r.status}` };
   });
   let tempRapperId;
   await test('POST /rappers 创建 Rapper', async () => {
@@ -831,6 +1056,11 @@ async function main() {
     return expect(r.status, [201, 200]) && !!licenseTplId
       ? { ok: true, detail: `id=${licenseTplId}` } : { ok: false, detail: `status=${r.status}` };
   });
+  await test('PUT /admin/license-templates/:id 更新模板', async () => {
+    if (!licenseTplId) return { ok: false, detail: '模板未创建' };
+    const r = await put(`/admin/license-templates/${licenseTplId}`, { token: S.tok_admin, json: { content: '自动化测试协议模板内容-v2', is_active: 0 } });
+    return expect(r.status, [200]);
+  });
   await test('DELETE /admin/license-templates/:id 删除临时模板', async () => {
     if (!licenseTplId) return { ok: false, detail: '模板未创建' };
     const r = await del(`/admin/license-templates/${licenseTplId}`, { token: S.tok_admin });
@@ -846,10 +1076,11 @@ async function main() {
   });
 
   section('Q. 伴奏上传（管理员）');
-  await test('POST /beats/upload-targets 直传目标（local 返回 false）', async () => {
+  await test('POST /beats/upload-targets 直传目标（OSS dev/audio 前缀）', async () => {
     const r = await post('/beats/upload-targets', { token: S.tok_admin, json: { audio: { name: 'x.mp3', type: 'audio/mpeg' } } });
-    return r.status === 200 && r.body?.direct_upload === false
-      ? { ok: true } : { ok: false, detail: `status=${r.status}` };
+    const url = r.body?.audio?.uploadUrl || '';
+    return r.status === 200 && r.body?.direct_upload === true && url.includes('/dev/audio/')
+      ? { ok: true, detail: 'dev/audio' } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
   });
   let tempBeatId;
   await test('POST /beats/upload 上传 beat（音频+封面）', async () => {
@@ -867,11 +1098,12 @@ async function main() {
     const r = await put(`/beats/${tempBeatId}`, { token: S.tok_admin, json: { title: '自动化测试 Beat-改', bpm: 150 } });
     return expect(r.status, [200]);
   });
-  await test('POST /beats/:id/cover/upload-target 封面直传目标', async () => {
+  await test('POST /beats/:id/cover/upload-target 封面直传目标（OSS dev/covers）', async () => {
     if (!tempBeatId) return { ok: false, detail: 'beat 未创建' };
     const r = await post(`/beats/${tempBeatId}/cover/upload-target`, { token: S.tok_admin, json: { file: { name: 'c.png', type: 'image/png' } } });
-    return r.status === 200 && r.body?.direct_upload === false
-      ? { ok: true } : { ok: false, detail: `status=${r.status}` };
+    const url = r.body?.target?.uploadUrl || '';
+    return r.status === 200 && r.body?.direct_upload === true && url.includes('/dev/covers/')
+      ? { ok: true, detail: 'dev/covers' } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
   });
   await test('POST /beats/:id/cover 上传封面', async () => {
     if (!tempBeatId) return { ok: false, detail: 'beat 未创建' };
@@ -879,6 +1111,21 @@ async function main() {
     const r = await post(`/beats/${tempBeatId}/cover`, { token: S.tok_admin, form });
     return r.status === 200 && !!r.body?.cover_image
       ? { ok: true } : { ok: false, detail: `status=${r.status}` };
+  });
+  await test('PATCH /beats/:id/cover 替换封面', async () => {
+    if (!tempBeatId) return { ok: false, detail: 'beat 未创建' };
+    const form = makeForm({}, { cover: { path: PNG, name: 'cover3.png', type: 'image/png' } });
+    const r = await patch(`/beats/${tempBeatId}/cover`, { token: S.tok_admin, form });
+    return r.status === 200 && !!r.body?.cover_image
+      ? { ok: true } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 120)}` };
+  });
+  await test('POST /beats/:id/cover 非法类型封面应 400', async () => {
+    if (!tempBeatId) return { ok: false, detail: 'beat 未创建' };
+    const txt = `${TMP}/bad-cover.txt`;
+    fs.writeFileSync(txt, 'not an image');
+    const form = makeForm({}, { cover: { path: txt, name: 'bad.txt', type: 'text/plain' } });
+    const r = await post(`/beats/${tempBeatId}/cover`, { token: S.tok_admin, form });
+    return expect(r.status, [400]);
   });
   await test('POST /beats/upload-direct 直传地址创建 beat', async () => {
     const r = await post('/beats/upload-direct', {
@@ -892,13 +1139,14 @@ async function main() {
         tags: '测试,Drill',
         is_free: 0,
         duration: 100,
-        audio_file_path: 'https://mymusic-site.oss-cn-beijing.aliyuncs.com/audio/audio-1784336082473-43774292.mp3'
+        audio_file_path: S.testAudioUrl || 'https://mymusic-site.oss-cn-beijing.aliyuncs.com/dev/audio/audio-1784336082473-43774292.mp3'
       },
       timeout: 30000
     });
     S.directBeatId = r.body?.beats?.[0]?.id ?? r.body?.beat?.id;
-    return expect(r.status, [201, 200]) && !!S.directBeatId
-      ? { ok: true, detail: `id=${S.directBeatId}` } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
+    const beat = r.body?.beats?.[0] || r.body?.beat;
+    return expect(r.status, [201, 200]) && !!S.directBeatId && (beat?.file_path || '').includes('/dev/')
+      ? { ok: true, detail: `id=${S.directBeatId}, OSS=dev/` } : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
   });
   await test('POST /beats/detect-bpm 音频 BPM 识别', async () => {
     const form = makeForm({}, { audio: { path: WAV, name: 'bpm.wav', type: 'audio/wav' } });
@@ -942,6 +1190,439 @@ async function main() {
     if (!rp) return { ok: true, detail: '无' };
     const r = await del(`/rappers/${rp.id}`, { token: S.tok_admin });
     return expect(r.status, [200]);
+  });
+
+  // ── S. 补充：状态流转与边界（幂等，可重复运行） ──
+  section('S. 状态流转与边界');
+  await test('免费用户经积分兑换每日最多 5 次：第 6 次应 403 (DOWNLOAD_LIMIT_REACHED)', async () => {
+    const db = await devDb();
+    const [rows] = await db.query('SELECT id FROM users WHERE username = ?', ['tester_free']);
+    const uid = rows[0]?.id;
+    if (!uid) { await db.end(); return { ok: false, detail: 'tester_free 不存在' }; }
+    // 复位今日下载记录与积分，保证可重复运行
+    await db.query('DELETE FROM downloads WHERE user_id = ? AND created_at >= CURDATE()', [uid]);
+    const fdb = await forumDb();
+    await fdb.query(
+      'INSERT INTO forum_user_points (user_id, total_points) VALUES (?, 100) ON DUPLICATE KEY UPDATE total_points = 100',
+      [uid]
+    );
+    await fdb.end();
+
+    const list = await get('/beats?page=1&pageSize=20');
+    const beats = (pick(list.body, ['beats', 'list']) || []).map(b => b.id).slice(0, 6);
+    if (beats.length < 6) { await db.end(); return { ok: false, detail: '可用 beat 不足 6 个' }; }
+    for (const bid of beats) {
+      await post(`/beats/${bid}/license/agree`, { token: S.tok_free, json: {} });
+    }
+    for (let i = 0; i < 5; i++) {
+      const ex = await post('/forum/points/exchange-download', { token: S.tok_free, json: {} });
+      if (ex.status !== 200) { await db.end(); return { ok: false, detail: `兑换下载权限失败 ${i + 1}: ${ex.text.slice(0, 100)}` }; }
+    }
+    for (let i = 0; i < 5; i++) {
+      const d = await get(`/beats/${beats[i]}/download`, { token: S.tok_free });
+      const ok = d.status === 302 || (d.status === 200 && (d.headers.get('content-type') || '').includes('audio'));
+      if (!ok) { await db.end(); return { ok: false, detail: `第 ${i + 1} 次下载 status=${d.status}` }; }
+    }
+    const blocked = await get(`/beats/${beats[5]}/download`, { token: S.tok_free });
+    await db.end();
+    return blocked.status === 403 && blocked.body?.code === 'DOWNLOAD_LIMIT_REACHED'
+      ? { ok: true, detail: `${blocked.body.daily_used}/${blocked.body.daily_limit}（经积分兑换）` }
+      : { ok: false, detail: `status=${blocked.status}, code=${blocked.body?.code}, body=${blocked.text.slice(0, 120)}` };
+  });
+
+  await test('basic 会员每日下载 10 次上限：第 11 次应 403 (DOWNLOAD_LIMIT_REACHED)', async () => {
+    const db = await devDb();
+    const [rows] = await db.query('SELECT id FROM users WHERE username = ?', ['tester_basic']);
+    const uid = rows[0]?.id;
+    if (!uid) { await db.end(); return { ok: false, detail: 'tester_basic 不存在' }; }
+    // 复位今日下载记录，保证可重复运行
+    await db.query('DELETE FROM downloads WHERE user_id = ? AND created_at >= CURDATE()', [uid]);
+    const list = await get('/beats?page=1&pageSize=30');
+    const beats = (pick(list.body, ['beats', 'list']) || []).map(b => b.id).slice(0, 11);
+    if (beats.length < 11) { await db.end(); return { ok: false, detail: '可用 beat 不足 11 个' }; }
+    for (const bid of beats) {
+      await post(`/beats/${bid}/license/agree`, { token: S.tok_basic, json: {} });
+    }
+    for (let i = 0; i < 10; i++) {
+      const d = await get(`/beats/${beats[i]}/download`, { token: S.tok_basic });
+      const ok = d.status === 302 || (d.status === 200 && (d.headers.get('content-type') || '').includes('audio'));
+      if (!ok) { await db.end(); return { ok: false, detail: `第 ${i + 1} 次下载 status=${d.status}` }; }
+    }
+    const blocked = await get(`/beats/${beats[10]}/download`, { token: S.tok_basic });
+    await db.end();
+    return blocked.status === 403 && blocked.body?.code === 'DOWNLOAD_LIMIT_REACHED'
+      ? { ok: true, detail: `${blocked.body.daily_used}/${blocked.body.daily_limit}` }
+      : { ok: false, detail: `status=${blocked.status}, code=${blocked.body?.code}, body=${blocked.text.slice(0, 120)}` };
+  });
+
+  await test('VIP 到期自动降级：过期用户访问 vip-status 返回 free 并同步落库', async () => {
+    // 用全新注册用户避免 VIP 缓存干扰
+    const name = `expiry_${Date.now().toString().slice(-8)}`;
+    const reg = await post('/auth/register', { json: { username: name, email: `${name}@test.local`, password: 'Test@123456' } });
+    if (reg.status !== 201) return { ok: false, detail: `注册失败 status=${reg.status}` };
+    const token = reg.body?.token;
+    const db = await devDb();
+    const [rows] = await db.query('SELECT id FROM users WHERE username = ?', [name]);
+    const uid = rows[0]?.id;
+    if (!uid) { await db.end(); return { ok: false, detail: '未找到新用户' }; }
+    // 模拟已过期的高等级会员
+    await db.query(
+      "UPDATE users SET vip_level = 'premium', vip_expire_at = '2020-01-01 00:00:00' WHERE id = ?",
+      [uid]
+    );
+    const r = await get('/user/vip-status', { token });
+    const after = (await db.query('SELECT vip_level, vip_expire_at FROM users WHERE id = ?', [uid]))[0][0];
+    // 清理测试用户
+    const usersList = (await get('/admin/users', { token: S.tok_admin })).body?.users || [];
+    const adminUid = usersList.find(u => u.username === name)?.id;
+    if (adminUid) await del(`/admin/users/${adminUid}`, { token: S.tok_admin });
+    await db.end();
+    const bodyFree = r.status === 200 && (r.body?.vip_level === 'free' || r.body?.level === 'free');
+    return bodyFree && after.vip_level === 'free'
+      ? { ok: true, detail: 'vip-status=free 且 DB 已同步为 free' }
+      : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 120)}, db=${after.vip_level}` };
+  });
+
+  await test('POST /admin/beats/:id/detect-bpm 重新识别 BPM', async () => {
+    if (!S.freeBeatId) return { ok: false, detail: '无可用 beat' };
+    const r = await post(`/admin/beats/${S.freeBeatId}/detect-bpm`, { token: S.tok_admin, json: {}, timeout: 90000 });
+    return r.status === 200 && typeof r.body?.bpm === 'number'
+      ? { ok: true, detail: `bpm=${r.body.bpm}, duration=${r.body.duration_seconds}, key=${r.body.key || '-'}` }
+      : { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 150)}` };
+  });
+
+  await test('抽奖 VIP 奖品分支（强制 VIP 1天）：到期时间按原到期日 +1 天', async () => {
+    const db = await devDb();
+    const [rows] = await db.query('SELECT id FROM users WHERE username = ?', ['tester_premium']);
+    const uid = rows[0]?.id;
+    if (!uid) { await db.end(); return { ok: false, detail: 'tester_premium 不存在' }; }
+    // 复位今日抽奖流水（重置每日次数）并确保积分充足
+    const fdb = await forumDb();
+    await fdb.query(
+      `DELETE FROM forum_point_transactions
+       WHERE user_id = ? AND reason IN ('lottery_cost','lottery_participation','lottery') AND DATE(created_at) = CURDATE()`,
+      [uid]
+    );
+    await fdb.query(
+      'INSERT INTO forum_user_points (user_id, total_points) VALUES (?, 200) ON DUPLICATE KEY UPDATE total_points = 200',
+      [uid]
+    );
+    const before = (await db.query('SELECT vip_expire_at FROM users WHERE id = ?', [uid]))[0][0];
+    const r = await post('/forum/lottery', {
+      token: S.tok_premium,
+      json: {},
+      headers: { 'x-lottery-force-prize': '6' },
+    });
+    const after = (await db.query('SELECT vip_expire_at FROM users WHERE id = ?', [uid]))[0][0];
+    await db.end();
+    await fdb.end();
+    if (r.status !== 200) return { ok: false, detail: `status=${r.status}, body=${r.text.slice(0, 120)}` };
+    const diffMs = new Date(after.vip_expire_at).getTime() - new Date(before.vip_expire_at).getTime();
+    const plusOneDay = diffMs === 86400000;
+    return r.body?.prize?.vip_days === 1 && plusOneDay && r.body?.points_earned === -5
+      ? { ok: true, detail: `prize=VIP 1天, 到期 +1 天, 净积分=${r.body.points_earned}` }
+      : { ok: false, detail: `prize=${JSON.stringify(r.body?.prize)}, diffMs=${diffMs}, earned=${r.body?.points_earned}` };
+  });
+
+  // ── T. 积分/签到/转盘/发帖 闭环核验 ──
+  section('T. 积分/签到/发帖闭环');
+  await test('积分账本闭环：签到+发帖×2+抽奖，sum(流水)=总额，第3帖触顶0分', async () => {
+    const name = `loop_${Date.now().toString().slice(-8)}`;
+    const reg = await post('/auth/register', { json: { username: name, email: `${name}@test.local`, password: 'Test@123456' } });
+    if (reg.status !== 201) return { ok: false, detail: `注册失败 status=${reg.status}` };
+    const token = reg.body?.token;
+    const uid = reg.body?.user?.id;
+    if (!uid) return { ok: false, detail: '未拿到用户 id' };
+
+    // 1. 首日签到 +1
+    const s1 = await post('/forum/sign-in', { token, json: {} });
+    if (s1.status !== 200 || s1.body?.points_earned !== 1) {
+      return { ok: false, detail: `签到异常 status=${s1.status}, body=${s1.text.slice(0, 120)}` };
+    }
+
+    // 2. 发帖×2，每次 +5（毛胚等级倍率 1，发帖每日上限 10）
+    const postIds = [];
+    for (let i = 1; i <= 2; i++) {
+      const p = await post('/forum/posts', { token, json: { title: `【闭环测试】${name}-帖${i}`, content: '积分闭环验证', category_id: 1 } });
+      if (p.status !== 200 || p.body?.points_earned !== 5) {
+        return { ok: false, detail: `发帖${i}异常 status=${p.status}, body=${p.text.slice(0, 120)}` };
+      }
+      postIds.push(p.body?.post_id ?? p.body?.id);
+    }
+
+    // 3. 抽奖（强制中 100 积分）：-5 +100 = 净 +95
+    const lot = await post('/forum/lottery', { token, json: {}, headers: { 'x-lottery-force-prize': '5' } });
+    if (lot.status !== 200 || lot.body?.prize?.points !== 100 || lot.body?.points_earned !== 95) {
+      return { ok: false, detail: `抽奖异常 status=${lot.status}, body=${lot.text.slice(0, 150)}` };
+    }
+
+    // 4. 第 3 帖：今日发帖积分已达上限 → 0 分
+    const p3 = await post('/forum/posts', { token, json: { title: `【闭环测试】${name}-帖3`, content: '触发每日上限', category_id: 1 } });
+    postIds.push(p3.body?.post_id ?? p3.body?.id);
+    if (p3.status !== 200 || p3.body?.points_earned !== 0) {
+      return { ok: false, detail: `第3帖应0分 status=${p3.status}, body=${p3.text.slice(0, 120)}` };
+    }
+
+    // 5. 对账：sum(流水) == 总额 == 1+5+5-5+100 = 106
+    const tx = await get('/forum/points/transactions', { token });
+    const records = tx.body?.records || [];
+    const sum = records.reduce((a, r) => a + Number(r.change || 0), 0);
+    const total = tx.body?.total_points;
+    const counts = records.reduce((m, r) => { m[r.reason] = (m[r.reason] || 0) + 1; return m; }, {});
+    const ledgerOk = sum === total && total === 106
+      && counts.sign_in === 1
+      && counts.post_created === 2      // 第 3 帖无奖励流水
+      && counts.lottery_cost === 1
+      && counts.lottery_reward === 1;
+
+    // 6. 抽奖记录落库
+    const fdb = await forumDb();
+    const [lr] = await fdb.query('SELECT prize_name FROM forum_lottery_records WHERE user_id = ?', [uid]);
+    const lotRecordOk = lr.length === 1 && lr[0].prize_name === '100 积分';
+    await fdb.end();
+
+    // 清理
+    for (const pid of postIds) { if (pid) await del(`/forum/posts/${pid}`, { token: S.tok_admin }); }
+    const usersList = (await get('/admin/users', { token: S.tok_admin })).body?.users || [];
+    const adminUid = usersList.find(u => u.username === name)?.id;
+    if (adminUid) await del(`/admin/users/${adminUid}`, { token: S.tok_admin });
+
+    return ledgerOk && lotRecordOk
+      ? { ok: true, detail: `sum=${sum}=total=${total}, reasons=${JSON.stringify(counts)}, 抽奖记录=${lr[0]?.prize_name}` }
+      : { ok: false, detail: `sum=${sum}, total=${total}, counts=${JSON.stringify(counts)}, lotRecord=${JSON.stringify(lr)}` };
+  });
+
+  await test('签到闭环：连续6天+第7天里程碑，奖励 2+3+50=55 且流水齐全', async () => {
+    const name = `sign_${Date.now().toString().slice(-8)}`;
+    const reg = await post('/auth/register', { json: { username: name, email: `${name}@test.local`, password: 'Test@123456' } });
+    if (reg.status !== 201) return { ok: false, detail: `注册失败 status=${reg.status}` };
+    const token = reg.body?.token;
+    const uid = reg.body?.user?.id;
+    if (!uid) return { ok: false, detail: '未拿到用户 id' };
+
+    // 造 6 天历史签到（不含今天）
+    const fdb = await forumDb();
+    for (let d = 1; d <= 6; d++) {
+      const dt = new Date(Date.now() - d * 86400000);
+      const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      await fdb.query('INSERT IGNORE INTO forum_sign_ins (user_id, sign_date, points) VALUES (?, ?, 1)', [uid, dateStr]);
+    }
+    await fdb.end();
+
+    const before = await get('/forum/sign-in/status', { token });
+    if (before.body?.consecutive_days !== 6 || before.body?.signed_today !== false) {
+      return { ok: false, detail: `签到前状态异常 ${JSON.stringify(before.body)}` };
+    }
+
+    const s = await post('/forum/sign-in', { token, json: {} });
+    if (s.status !== 200) return { ok: false, detail: `签到失败 status=${s.status}, body=${s.text.slice(0, 120)}` };
+    const respOk = s.body?.consecutive_days === 7
+      && s.body?.points_earned === 55
+      && s.body?.milestone?.days === 7
+      && s.body?.milestone?.points === 50
+      && s.body?.total_points === 55;
+
+    const tx = await get('/forum/points/transactions', { token });
+    const records = tx.body?.records || [];
+    const sum = records.reduce((a, r) => a + Number(r.change || 0), 0);
+    const counts = records.reduce((m, r) => { m[r.reason] = (m[r.reason] || 0) + 1; return m; }, {});
+    const txOk = sum === 55 && counts.sign_in === 1 && counts.sign_in_streak === 1 && counts.sign_in_milestone === 1;
+
+    const dup = await post('/forum/sign-in', { token, json: {} });
+    const dupOk = dup.status === 400;
+
+    const usersList = (await get('/admin/users', { token: S.tok_admin })).body?.users || [];
+    const adminUid = usersList.find(u => u.username === name)?.id;
+    if (adminUid) await del(`/admin/users/${adminUid}`, { token: S.tok_admin });
+
+    return respOk && txOk && dupOk
+      ? { ok: true, detail: `连续=${s.body.consecutive_days}, earned=${s.body.points_earned}, 流水=${JSON.stringify(counts)}` }
+      : { ok: false, detail: `resp=${JSON.stringify(s.body)}, counts=${JSON.stringify(counts)}, dup=${dup.status}` };
+  });
+
+  await test('点赞奖励闭环：他人点赞给作者 +1 分并写流水', async () => {
+    const authorName = `liker_a_${Date.now().toString().slice(-8)}`;
+    const likerName = `liker_b_${Date.now().toString().slice(-8)}`;
+    const regA = await post('/auth/register', { json: { username: authorName, email: `${authorName}@test.local`, password: 'Test@123456' } });
+    const regB = await post('/auth/register', { json: { username: likerName, email: `${likerName}@test.local`, password: 'Test@123456' } });
+    if (regA.status !== 201 || regB.status !== 201) return { ok: false, detail: '注册作者/点赞用户失败' };
+    const tokenA = regA.body?.token;
+    const tokenB = regB.body?.token;
+    const uidA = regA.body?.user?.id;
+
+    const p = await post('/forum/posts', { token: tokenA, json: { title: `【闭环测试】${authorName}-求赞`, content: '点赞奖励验证', category_id: 1 } });
+    const postId = p.body?.post_id ?? p.body?.id;
+    if (p.status !== 200 || !postId) return { ok: false, detail: `发帖失败 status=${p.status}` };
+
+    const like = await post(`/forum/posts/${postId}/like`, { token: tokenB, json: {} });
+    if (like.status !== 200 || like.body?.liked !== true) return { ok: false, detail: `点赞失败 status=${like.status}` };
+
+    const tx = await get('/forum/points/transactions', { token: tokenA });
+    const records = tx.body?.records || [];
+    const earned = records.filter(r => r.reason === 'post_liked').reduce((a, r) => a + Number(r.change || 0), 0);
+    const total = tx.body?.total_points;
+
+    await del(`/forum/posts/${postId}`, { token: S.tok_admin });
+    for (const [u, t] of [[authorName, tokenA], [likerName, tokenB]]) {
+      const usersList = (await get('/admin/users', { token: S.tok_admin })).body?.users || [];
+      const adminUid = usersList.find(x => x.username === u)?.id;
+      if (adminUid) await del(`/admin/users/${adminUid}`, { token: S.tok_admin });
+    }
+
+    return earned === 1 && total === 6
+      ? { ok: true, detail: `post_created +5 + post_liked +1 = ${total}` }
+      : { ok: false, detail: `earned=${earned}, total=${total}` };
+  });
+
+  await test('签到里程碑闭环：连续 30 天获得 200 分里程碑', async () => {
+    const name = `ms30_${Date.now().toString().slice(-8)}`;
+    const reg = await post('/auth/register', { json: { username: name, email: `${name}@test.local`, password: 'Test@123456' } });
+    if (reg.status !== 201) return { ok: false, detail: `注册失败 status=${reg.status}` };
+    const token = reg.body?.token;
+    const uid = reg.body?.user?.id;
+    const fdb = await forumDb();
+    for (let d = 1; d <= 29; d++) {
+      const dt = new Date(Date.now() - d * 86400000);
+      const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      await fdb.query('INSERT IGNORE INTO forum_sign_ins (user_id, sign_date, points) VALUES (?, ?, 1)', [uid, dateStr]);
+    }
+    await fdb.end();
+
+    const s = await post('/forum/sign-in', { token, json: {} });
+    if (s.status !== 200) return { ok: false, detail: `签到失败 status=${s.status}` };
+    const ok = s.body?.consecutive_days === 30
+      && s.body?.points_earned === 205           // 2(签到) + 3(连续) + 200(里程碑)
+      && s.body?.milestone?.days === 30
+      && s.body?.milestone?.points === 200
+      && s.body?.total_points === 205;
+    const tx = await get('/forum/points/transactions', { token });
+    const records = tx.body?.records || [];
+    const sum = records.reduce((a, r) => a + Number(r.change || 0), 0);
+    const counts = records.reduce((m, r) => { m[r.reason] = (m[r.reason] || 0) + 1; return m; }, {});
+    const txOk = sum === 205 && counts.sign_in_milestone === 1;
+
+    const usersList = (await get('/admin/users', { token: S.tok_admin })).body?.users || [];
+    const adminUid = usersList.find(u => u.username === name)?.id;
+    if (adminUid) await del(`/admin/users/${adminUid}`, { token: S.tok_admin });
+
+    return ok && txOk
+      ? { ok: true, detail: `连续=${s.body.consecutive_days}, earned=${s.body.points_earned}, 流水=${JSON.stringify(counts)}` }
+      : { ok: false, detail: `resp=${JSON.stringify(s.body)}, sum=${sum}, counts=${JSON.stringify(counts)}` };
+  });
+
+  await test('签到里程碑闭环：连续 100 天获得 500 分里程碑', async () => {
+    const name = `ms100_${Date.now().toString().slice(-8)}`;
+    const reg = await post('/auth/register', { json: { username: name, email: `${name}@test.local`, password: 'Test@123456' } });
+    if (reg.status !== 201) return { ok: false, detail: `注册失败 status=${reg.status}` };
+    const token = reg.body?.token;
+    const uid = reg.body?.user?.id;
+    const fdb = await forumDb();
+    for (let d = 1; d <= 99; d++) {
+      const dt = new Date(Date.now() - d * 86400000);
+      const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      await fdb.query('INSERT IGNORE INTO forum_sign_ins (user_id, sign_date, points) VALUES (?, ?, 1)', [uid, dateStr]);
+    }
+    await fdb.end();
+
+    const s = await post('/forum/sign-in', { token, json: {} });
+    if (s.status !== 200) return { ok: false, detail: `签到失败 status=${s.status}` };
+    const ok = s.body?.consecutive_days === 100
+      && s.body?.points_earned === 505           // 2(签到) + 3(连续) + 500(里程碑)
+      && s.body?.milestone?.days === 100
+      && s.body?.milestone?.points === 500
+      && s.body?.total_points === 505;
+    const tx = await get('/forum/points/transactions', { token });
+    const records = tx.body?.records || [];
+    const sum = records.reduce((a, r) => a + Number(r.change || 0), 0);
+    const counts = records.reduce((m, r) => { m[r.reason] = (m[r.reason] || 0) + 1; return m; }, {});
+    const txOk = sum === 505 && counts.sign_in_milestone === 1;
+
+    const usersList = (await get('/admin/users', { token: S.tok_admin })).body?.users || [];
+    const adminUid = usersList.find(u => u.username === name)?.id;
+    if (adminUid) await del(`/admin/users/${adminUid}`, { token: S.tok_admin });
+
+    return ok && txOk
+      ? { ok: true, detail: `连续=${s.body.consecutive_days}, earned=${s.body.points_earned}, 流水=${JSON.stringify(counts)}` }
+      : { ok: false, detail: `resp=${JSON.stringify(s.body)}, sum=${sum}, counts=${JSON.stringify(counts)}` };
+  });
+
+  await test('发帖奖励等级倍率：炸场(≥500分)发帖 +10，当日上限 10 分', async () => {
+    const name = `mul_${Date.now().toString().slice(-8)}`;
+    const reg = await post('/auth/register', { json: { username: name, email: `${name}@test.local`, password: 'Test@123456' } });
+    if (reg.status !== 201) return { ok: false, detail: `注册失败 status=${reg.status}` };
+    const token = reg.body?.token;
+    const uid = reg.body?.user?.id;
+    // 直接置 600 分（炸场等级，倍率 2），本用例只校验增量
+    const fdb = await forumDb();
+    await fdb.query(
+      'INSERT INTO forum_user_points (user_id, total_points) VALUES (?, 600) ON DUPLICATE KEY UPDATE total_points = 600',
+      [uid]
+    );
+    await fdb.end();
+
+    const p1 = await post('/forum/posts', { token, json: { title: `【闭环测试】${name}-倍率1`, content: '倍率验证', category_id: 1 } });
+    const p2 = await post('/forum/posts', { token, json: { title: `【闭环测试】${name}-倍率2`, content: '上限验证', category_id: 1 } });
+    const ok = p1.status === 200 && p1.body?.points_earned === 10
+      && p2.status === 200 && p2.body?.points_earned === 0;
+
+    const tx = await get('/forum/points/transactions', { token });
+    const records = tx.body?.records || [];
+    const postSum = records.filter(r => r.reason === 'post_created').reduce((a, r) => a + Number(r.change || 0), 0);
+    const total = tx.body?.total_points;
+    const txOk = postSum === 10 && total === 610;
+
+    const usersList = (await get('/admin/users', { token: S.tok_admin })).body?.users || [];
+    const adminUid = usersList.find(u => u.username === name)?.id;
+    if (adminUid) await del(`/admin/users/${adminUid}`, { token: S.tok_admin });
+
+    return ok && txOk
+      ? { ok: true, detail: `第1帖+10, 第2帖0分, post_created合计=${postSum}, total=${total}` }
+      : { ok: false, detail: `p1=${JSON.stringify(p1.body)}, p2=${JSON.stringify(p2.body)}, postSum=${postSum}, total=${total}` };
+  });
+
+  await test('评论奖励闭环：5 条评论 +10（每日上限）、他人点赞 +1', async () => {
+    const authorName = `cmt_a_${Date.now().toString().slice(-8)}`;
+    const likerName = `cmt_b_${Date.now().toString().slice(-8)}`;
+    const regA = await post('/auth/register', { json: { username: authorName, email: `${authorName}@test.local`, password: 'Test@123456' } });
+    const regB = await post('/auth/register', { json: { username: likerName, email: `${likerName}@test.local`, password: 'Test@123456' } });
+    if (regA.status !== 201 || regB.status !== 201) return { ok: false, detail: '注册评论作者/点赞用户失败' };
+    const tokenA = regA.body?.token;
+    const tokenB = regB.body?.token;
+
+    const posts = await get('/forum/posts?page=1&pageSize=1');
+    const postId = pick(posts.body, ['posts', 'list', 'data'])?.[0]?.id;
+    if (!postId) return { ok: false, detail: '无帖子可评论' };
+
+    const commentIds = [];
+    let earnedSum = 0;
+    for (let i = 1; i <= 5; i++) {
+      const c = await post(`/forum/posts/${postId}/comments`, { token: tokenA, json: { content: `闭环评论-${i}` } });
+      if (c.status !== 200) return { ok: false, detail: `评论${i}失败 status=${c.status}` };
+      earnedSum += c.body?.points_earned || 0;
+      commentIds.push(c.body?.comment?.id);
+    }
+    const c6 = await post(`/forum/posts/${postId}/comments`, { token: tokenA, json: { content: '闭环评论-第6条' } });
+    const capOk = c6.status === 200 && c6.body?.points_earned === 0;
+
+    const like = await post(`/forum/comments/${commentIds[0]}/like`, { token: tokenB, json: {} });
+    const likeOk = like.status === 200 && like.body?.liked === true;
+
+    const tx = await get('/forum/points/transactions', { token: tokenA });
+    const records = tx.body?.records || [];
+    const ccSum = records.filter(r => r.reason === 'comment_created').reduce((a, r) => a + Number(r.change || 0), 0);
+    const clSum = records.filter(r => r.reason === 'comment_liked').reduce((a, r) => a + Number(r.change || 0), 0);
+    const total = tx.body?.total_points;
+    const ok = earnedSum === 10 && capOk && likeOk && ccSum === 10 && clSum === 1 && total === 11;
+
+    for (const [u] of [[authorName], [likerName]]) {
+      const usersList = (await get('/admin/users', { token: S.tok_admin })).body?.users || [];
+      const adminUid = usersList.find(x => x.username === u)?.id;
+      if (adminUid) await del(`/admin/users/${adminUid}`, { token: S.tok_admin });
+    }
+
+    return ok
+      ? { ok: true, detail: `comment_created +10, comment_liked +1, total=${total}` }
+      : { ok: false, detail: `earnedSum=${earnedSum}, cap=${JSON.stringify(c6.body)}, like=${like.status}, cc=${ccSum}, cl=${clSum}, total=${total}` };
   });
 
   // ── 汇总 ──
