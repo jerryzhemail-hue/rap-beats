@@ -874,6 +874,49 @@ router.put('/beats/:id', requireAuth, async (req: AuthRequest, res: Response) =>
   res.json(serializeBeatAssets(updated as any));
 });
 
+// PATCH /api/beats/:id/cover — 上传或移除封面（multipart，local/oss 均可用）
+router.patch('/beats/:id/cover', requireAuth, coverUpload.single('cover'), async (req: AuthRequest, res: Response) => {
+  const database = getDatabaseClient();
+  const { id } = req.params;
+  const beat = await database.queryOne<BeatRecord>('SELECT * FROM beats WHERE id = ?', [id]);
+  if (!beat) {
+    return res.status(404).json({ error: '伴奏不存在' });
+  }
+  if (!(await canManageBeat(req, beat))) {
+    return res.status(403).json({ error: '无权编辑该伴奏' });
+  }
+
+  // 支持前端通过 cover=null 显式移除封面
+  const removeCover = req.body.cover === 'null' || req.body.cover === null;
+
+  let nextCoverImage: string | null = beat.cover_image;
+
+  if (removeCover) {
+    nextCoverImage = null;
+  } else if (req.file) {
+    const ext = req.file.originalname.includes('.')
+      ? req.file.originalname.slice(req.file.originalname.lastIndexOf('.')).toLowerCase()
+      : '.jpg';
+    const { storedValue } = await saveBuffer('cover', {
+      buffer: req.file.buffer,
+      originalName: `cover-${id}-${Date.now()}${ext}`
+    });
+    nextCoverImage = storedValue;
+  }
+
+  await database.execute(
+    'UPDATE beats SET cover_image = ? WHERE id = ?',
+    [nextCoverImage, id]
+  );
+
+  if (beat.cover_image && nextCoverImage !== beat.cover_image) {
+    await deleteStoredAsset('cover', beat.cover_image);
+  }
+
+  const updated = await database.queryOne<BeatRecord>('SELECT * FROM beats WHERE id = ?', [id]);
+  res.json(serializeBeatAssets(updated as any));
+});
+
 // POST /api/beats/:id/play-events — 记录有效播放事件
 router.post('/beats/:id/play-events', playEventLimiter, optionalAuth, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();

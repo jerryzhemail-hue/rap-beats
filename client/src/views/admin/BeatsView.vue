@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from 'vue'
 import { fetchBeats } from '@/api/beats'
-import { deleteBeat, updateBeat, clearDemoBeats } from '@/api/admin'
-import { requestUploadTarget, uploadFileToTarget, type DirectUploadTarget } from '@/api/directUpload'
+import { deleteBeat, updateBeat, updateBeatCover, clearDemoBeats } from '@/api/admin'
 import { resolveCoverUrl } from '@/utils/assets'
 import type { Beat } from '@/types'
 
@@ -190,13 +189,12 @@ function removeCover() {
 }
 
 /**
- * 上传封面到直传通道，返回 cover_image 的 storedValue。
+ * 上传封面（先尝试直传通道，失败则降级到 multipart 路由）。
+ * 返回新的 cover_image URL（带签名）。
  * 如果没有选择新文件则返回 undefined（保持不变）或 null（清空封面）。
  */
 async function uploadCoverIfNeeded(): Promise<string | null | undefined> {
   if (!coverFile.value) {
-    // 没有新文件：如果用户点过"移除"，editForm.cover_image 已经是 null；
-    // 否则返回 undefined（保持不变）。
     if (editForm.value.cover_image === null && editingBeat && (editingBeat.cover_image ?? null) !== null) {
       return null
     }
@@ -206,27 +204,10 @@ async function uploadCoverIfNeeded(): Promise<string | null | undefined> {
   coverUploading.value = true
   coverProgress.value = 0
   try {
-    const targets = await requestUploadTarget<{ direct_upload: boolean; cover?: DirectUploadTarget | null }>(
-      '/api/beats/upload-targets',
-      {
-        audio: null,
-        cover: {
-          name: coverFile.value.name,
-          type: coverFile.value.type || 'image/jpeg'
-        }
-      }
-    )
-
-    if (!targets.direct_upload || !targets.cover) {
-      throw new Error('直传通道未开启，请联系管理员启用 OSS 直传')
-    }
-
-    await uploadFileToTarget(targets.cover, coverFile.value, (p) => {
-      coverProgress.value = p
-    })
-
+    const result = await updateBeatCover(editForm.value.id, coverFile.value)
     coverProgress.value = 100
-    return targets.cover.storedValue
+    // resolveCoverUrl 处理 storedValue → 带签名的完整 URL
+    return result.cover_image ? resolveCoverUrl(result.cover_image) : null
   } catch (err: any) {
     coverUploadError.value = err?.message || '封面上传失败'
     throw err

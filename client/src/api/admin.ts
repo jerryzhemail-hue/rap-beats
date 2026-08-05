@@ -63,6 +63,42 @@ export async function updateBeat(beatId: number, data: any) {
   })
 }
 
+// 上传或移除封面（multipart，local/oss 均可用）
+export async function updateBeatCover(beatId: number, coverFile?: File | null): Promise<{ cover_image: string | null }> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData()
+    if (coverFile) {
+      form.append('cover', coverFile)
+    } else {
+      form.append('cover', 'null')
+    }
+
+    const xhr = new XMLHttpRequest()
+    xhr.upload.addEventListener('progress', () => {})
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText))
+        } catch {
+          reject(new Error('响应解析失败'))
+        }
+      } else {
+        try {
+          const data = JSON.parse(xhr.responseText)
+          reject(new Error(data.error || data.message || `请求失败: ${xhr.status}`))
+        } catch {
+          reject(new Error(`请求失败: ${xhr.status}`))
+        }
+      }
+    })
+    xhr.addEventListener('error', () => reject(new Error('网络错误')))
+    xhr.open('PATCH', `/api/beats/${beatId}/cover`)
+    const token = localStorage.getItem('rap-beats-token')
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.send(form)
+  })
+}
+
 // ─── 使用协议管理 ────────────────────────────────────────────────────────────
 
 export interface LicenseTemplate {
