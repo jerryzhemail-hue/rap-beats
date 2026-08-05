@@ -63,3 +63,5 @@ Thumbs.db
 !.env.example
 !server/.env.example
 !server/.env.mysql.example
+test_audio/
+bpm_test_*.mjs
