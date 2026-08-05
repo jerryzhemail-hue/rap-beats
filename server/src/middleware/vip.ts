@@ -119,7 +119,7 @@ export async function getUserVipLevel(req: AuthRequest): Promise<VipLevel> {
 
 export function getDailyDownloadLimit(level: VipLevel): number | null {
   switch (level) {
-    case 'free': return 3;
+    case 'free': return 5; // 免费用户每天最多下载 5 次（经积分兑换权限，同样计入）
     case 'basic': return 10;
     case 'premium': return 30;
     case 'ultimate': return null; // 无限

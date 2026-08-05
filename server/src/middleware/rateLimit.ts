@@ -33,6 +33,11 @@ export function createRateLimiter(options: {
   const { windowMs, max, keyGenerator, message = '请求过于频繁，请稍后再试' } = options;
 
   return (req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => {
+    // 本地开发/自动化测试开关：RATE_LIMIT_DISABLED=true 时跳过限流（生产环境不要设置）
+    if (process.env.RATE_LIMIT_DISABLED === 'true') {
+      return next();
+    }
+
     const key = keyGenerator
       ? keyGenerator(req)
       : `${req.ip ?? 'unknown'}:${req.path}`;

@@ -1173,9 +1173,9 @@ async function getTodayLotteryCount(userId: number) {
     `SELECT COUNT(*) as count
      FROM forum_point_transactions
      WHERE user_id = ?
-       AND reason IN (?, ?)
+       AND reason IN ('lottery_cost', 'lottery_participation', 'lottery')
        AND DATE(created_at) = ?`,
-    [userId, 'lottery_participation', 'lottery', today]
+    [userId, today]
   );
   return row?.count ?? 0;
 }
@@ -1195,11 +1195,15 @@ async function getDailyLotteryChances(userId: number) {
 
 router.get('/forum/points/config', optionalAuth, async (req: AuthRequest, res) => {
   try {
+    // 按当前用户积分等级返回每日抽奖次数（游客按最低等级展示）
+    const dailyChances = req.user
+      ? await getDailyLotteryChances(req.user.id)
+      : POINT_LEVEL_CONFIG[0].lottery_daily_chances;
     res.json({
       levels: POINT_LEVEL_CONFIG,
       sign_in: SIGN_IN_CONFIG,
       lottery: {
-        daily_chances: 999,
+        daily_chances: dailyChances,
         prizes: LOTTERY_PRIZES.map((prize) => ({
           id: prize.id,
           name: prize.name,
@@ -1231,7 +1235,12 @@ router.get('/forum/lottery/status', optionalAuth, async (req: AuthRequest, res) 
   try {
     const db = getForumDatabaseClient();
 
-    const remainingChances = 999;
+    // 已登录用户：按积分等级计算每日次数并扣除今日已用；游客无抽奖资格按最低等级展示
+    const dailyChances = req.user
+      ? await getDailyLotteryChances(req.user.id)
+      : POINT_LEVEL_CONFIG[0].lottery_daily_chances;
+    const usedToday = req.user ? await getTodayLotteryCount(req.user.id) : 0;
+    const remainingChances = Math.max(0, dailyChances - usedToday);
 
     // 获取中奖记录（仅对已登录用户）
     let records: any[] = [];
@@ -1249,7 +1258,8 @@ router.get('/forum/lottery/status', optionalAuth, async (req: AuthRequest, res) 
     res.json({
       remaining_chances: remainingChances,
       records,
-      daily_chances: 999,
+      daily_chances: dailyChances,
+      used_today: usedToday,
       prizes: LOTTERY_PRIZES.map((p) => ({
         id: p.id,
         name: p.name,
@@ -1267,6 +1277,7 @@ router.get('/forum/lottery/status', optionalAuth, async (req: AuthRequest, res) 
 router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthRequest, res) => {
   try {
     const db = getForumDatabaseClient();
+    const mainDb = getDatabaseClient();
 
     // 先扣除抽奖消耗的积分
     const lotteryCost = 5;
@@ -1274,6 +1285,20 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
     if (userPoints < lotteryCost) {
       return res.status(400).json({ error: '积分不足，需要 5 积分才能抽奖' });
     }
+
+    // 每日抽奖次数限制（按积分等级：毛胚/出道 1 次、炸场 2 次、厂牌 3 次、GOAT 5 次）
+    const dailyChances = await getDailyLotteryChances(req.user!.id);
+    const usedToday = await getTodayLotteryCount(req.user!.id);
+    if (usedToday >= dailyChances) {
+      return res.status(403).json({
+        error: `今日抽奖次数已用完（${usedToday}/${dailyChances}）`,
+        code: 'LOTTERY_DAILY_LIMIT_REACHED',
+        daily_chances: dailyChances,
+        used: usedToday,
+        remaining: 0,
+      });
+    }
+
     await changePoints({
       userId: req.user!.id,
       amount: -lotteryCost,
@@ -1292,6 +1317,17 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
         selectedPrize = prize;
         break;
       }
+    }
+
+    // 测试钩子：仅 MOCK_PAYMENT_ENABLED=true（开发/测试环境）时，
+    // 允许请求头 x-lottery-force-prize 指定奖品，用于确定性覆盖 VIP 天等低概率分支；
+    // 生产环境没有该开关，此头会被忽略。
+    if (process.env.MOCK_PAYMENT_ENABLED === 'true') {
+      const forcedId = Number(req.headers['x-lottery-force-prize']);
+      const forced = Number.isFinite(forcedId)
+        ? LOTTERY_PRIZES.find((p) => p.id === forcedId)
+        : undefined;
+      if (forced) selectedPrize = forced;
     }
 
     // 记录中奖信息
@@ -1320,7 +1356,7 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
     // 发放 VIP 天数
     if (selectedPrize.vip_days > 0) {
       // 更新 VIP 过期时间
-      const user = await db.queryOne<{ vip_expire_at: string | null }>(
+      const user = await mainDb.queryOne<{ vip_expire_at: string | null }>(
         'SELECT vip_expire_at FROM users WHERE id = ?',
         [req.user!.id]
       );
@@ -1331,7 +1367,7 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
       } else {
         expireDate = new Date(now.getTime() + selectedPrize.vip_days * 86400000);
       }
-      await db.execute(
+      await mainDb.execute(
         'UPDATE users SET vip_expire_at = ? WHERE id = ?',
         [formatDateTime(expireDate), req.user!.id]
       );
@@ -1349,7 +1385,9 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
       },
       points_earned: newPoints,
       total_points: totalPoints,
-      remaining_chances: 999,
+      remaining_chances: Math.max(0, dailyChances - usedToday - 1),
+      daily_chances: dailyChances,
+      used_today: usedToday + 1,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1369,6 +1407,7 @@ router.post('/forum/points/exchange', exchangeLimiter, requireAuth, async (req: 
 
     const config = POINTS_EXCHANGE_CONFIG[level as keyof typeof POINTS_EXCHANGE_CONFIG];
     const db = getForumDatabaseClient();
+    const mainDb = getDatabaseClient();
 
     // 检查积分是否足够
     const userPoints = await getTotalPoints(req.user!.id);
@@ -1385,7 +1424,7 @@ router.post('/forum/points/exchange', exchangeLimiter, requireAuth, async (req: 
     });
 
     // 更新 VIP 状态
-    const user = await db.queryOne<{ vip_expire_at: string | null; vip_level: string | null }>(
+    const user = await mainDb.queryOne<{ vip_expire_at: string | null; vip_level: string | null }>(
       'SELECT vip_expire_at, vip_level FROM users WHERE id = ?',
       [req.user!.id]
     );
@@ -1397,7 +1436,7 @@ router.post('/forum/points/exchange', exchangeLimiter, requireAuth, async (req: 
       expireDate = new Date(now.getTime() + config.duration_days * 86400000);
     }
 
-    await db.execute(
+    await mainDb.execute(
       'UPDATE users SET vip_level = ?, vip_expire_at = ? WHERE id = ?',
       [config.vip_level, formatDateTime(expireDate), req.user!.id]
     );
@@ -1715,7 +1754,9 @@ router.post('/forum/upload-audio', uploadLimiter, requireAuth, forumAudioUpload.
   });
 
   const audioUrl = asset.publicUrl;
-  const audioId = `${asset.storedValue}`;
+  // audio_id 必须 URL 安全（本地/OSS 模式一致）：取文件名去扩展名
+  // OSS 模式下 storedValue 是完整 URL，直接作为路由参数会因包含 / 而 404
+  const audioId = (String(asset.storedValue).split('/').pop() || '').replace(/\.[^.]+$/, '');
 
   // 第一阶段（同步、极快）：上传文件 + 解析元数据（music-metadata，几十毫秒）
   let bpm: number | null = null;

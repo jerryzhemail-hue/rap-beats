@@ -611,6 +611,20 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
 
   // 免费用户：尝试使用积分兑换的下载权限
   if (!canDownload(vipLevel)) {
+    // 免费用户每日下载次数上限（积分兑换权限同样计入，默认 5 次/天）
+    const limit = getDailyDownloadLimit(vipLevel);
+    if (limit !== null) {
+      const dailyCount = await getDailyDownloadCount(req.user!.id);
+      if (dailyCount >= limit) {
+        return res.status(403).json({
+          error: `今日下载次数已用完（${dailyCount}/${limit}），升级会员享更多下载`,
+          code: 'DOWNLOAD_LIMIT_REACHED',
+          daily_limit: limit,
+          daily_used: dailyCount
+        });
+      }
+    }
+
     // 查询是否有未使用的积分下载权限
     const permission = await forumDb.queryOne<{ id: number }>(
       'SELECT id FROM forum_point_download_permissions WHERE user_id = ? AND used = 0 LIMIT 1',
