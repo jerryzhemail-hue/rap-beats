@@ -157,6 +157,13 @@ jobs:
             # 停止旧容器（数据卷保留）
             docker compose -f docker-compose.prod.yml down --remove-orphans || true
 
+            # 清理历史上手动启动/无 compose 标签的遗留容器，避免容器名冲突导致 up 失败
+            for c in rap-beats-server rap-beats-bpm rap-beats-client rap-beats-mysql; do
+              if [ "$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' $c 2>/dev/null)" != "rap-beats" ]; then
+                docker rm -f $c 2>/dev/null || true
+              fi
+            done
+
             # 启动新容器（compose 自动读取同目录 .env 中的配置变量）
             docker compose -f docker-compose.prod.yml up -d
 
