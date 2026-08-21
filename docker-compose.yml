@@ -57,7 +57,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # 强制使用 MySQL，不走 SQLite
+      # 数据库连接：使用 MySQL（项目目前唯一支持的数据库）
       DB_DRIVER: mysql
       DB_HOST: mysql
       DB_PORT: 3306

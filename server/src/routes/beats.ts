@@ -33,6 +33,7 @@ import { serializeBeatAssets } from '../utils/assets.js';
 import { toDateTimeString } from '../utils/timezone.js';
 import { invalidateVipCache, recordPreviewAccess, getGuestTodayPreviewCount, extractGuestSessionId, GUEST_PREVIEW_LIMIT } from '../middleware/vip.js';
 import { updateRapperSortOrderByName } from '../services/rapperScore.js';
+import { ensureRapperExists } from './upload.js';
 
 const router = Router();
 
@@ -864,6 +865,7 @@ router.put('/beats/:id', requireAuth, async (req: AuthRequest, res: Response) =>
   }
 
   const nextCoverImage = cover_image === undefined ? beat.cover_image : cover_image;
+  const finalRapper = rapper === undefined ? beat.rapper : rapper;
 
   await database.execute(`
     UPDATE beats SET
@@ -878,10 +880,55 @@ router.put('/beats/:id', requireAuth, async (req: AuthRequest, res: Response) =>
       is_free = COALESCE(?, is_free),
       is_vip_only = COALESCE(?, is_vip_only)
     WHERE id = ?
-  `, [title, producer, rapper === undefined ? beat.rapper : rapper, bpm, key, genre, tags, nextCoverImage, is_free, is_vip_only, id]);
+  `, [title, producer, finalRapper, bpm, key, genre, tags, nextCoverImage, is_free, is_vip_only, id]);
+
+  // 同步 rapper 关联到 beat_producers 表
+  if (finalRapper) {
+    // 解析所有 producer 和 rapper 名字（支持 & 分隔的合作作品）
+    const allNames: string[] = [];
+    
+    if (producer) {
+      if (producer.includes('&')) {
+        allNames.push(...(producer.split('&') as string[]).map(n => n.trim()).filter(n => n));
+      } else {
+        allNames.push(producer.trim());
+      }
+    }
+    
+    if (finalRapper.includes('&')) {
+      allNames.push(...(finalRapper.split('&') as string[]).map(n => n.trim()).filter(n => n));
+    } else {
+      allNames.push(finalRapper.trim());
+    }
+
+    // 确保所有名字都有 rapper 记录，并创建 beat_producers 关联
+    for (const name of allNames) {
+      if (!name) continue;
+      await ensureRapperExists(database, name);
+      
+      const rapperRecord = await database.queryOne<{ id: number }>(
+        'SELECT id FROM rappers WHERE name = ?',
+        [name]
+      );
+      
+      await database.execute(
+        `INSERT INTO beat_producers (beat_id, rapper_id, rapper_name) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE rapper_id = COALESCE(rapper_id, VALUES(rapper_id)), rapper_name = VALUES(rapper_name)`,
+        [id, rapperRecord?.id || null, name]
+      );
+    }
+  }
 
   if (beat.cover_image && nextCoverImage !== beat.cover_image) {
     await deleteStoredAsset('cover', beat.cover_image);
+  }
+
+  // 更新关联 rapper 的权重
+  if (finalRapper) {
+    const primaryRapper = finalRapper.includes('&') ? finalRapper.split('&')[0].trim() : finalRapper;
+    updateRapperSortOrderByName(primaryRapper).catch(err => {
+      console.error('Failed to update rapper weight after edit:', err);
+    });
   }
 
   const updated = await database.queryOne<BeatRecord>('SELECT * FROM beats WHERE id = ?', [id]);

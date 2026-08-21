@@ -107,7 +107,7 @@ function validateBeatUploadPayload(payload: BeatUploadPayload) {
   return null;
 }
 
-async function ensureRapperExists(database: DatabaseClient, name: string): Promise<void> {
+export async function ensureRapperExists(database: DatabaseClient, name: string): Promise<void> {
   const existing = await database.queryOne<{ id: number }>(
     'SELECT id FROM rappers WHERE name = ?',
     [name]

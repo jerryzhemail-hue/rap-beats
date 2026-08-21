@@ -5,9 +5,6 @@ FROM node:20-alpine AS server-builder
 
 WORKDIR /app
 
-# 安装 Python 和编译工具（better-sqlite3 需要编译）
-RUN apk add --no-cache python3 make g++
-
 # 安装依赖（包括 devDependencies，用于构建）
 COPY server/package.json server/package-lock.json* ./
 RUN npm ci
