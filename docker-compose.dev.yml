@@ -4,23 +4,25 @@ name: rap-beats-dev
 
 # ============================================================
 # 本地开发环境 Docker Compose 配置
-# 
-# 使用独立的本地 MySQL 数据库，与线上环境完全隔离
-# 
+#
+# 只启动一个独立的本地 MySQL（端口 3307），与线上环境完全隔离。
+# 后端、前端在主机上用 npm run dev 启动，连这个容器。
+#
 # 启动：docker compose -f docker-compose.dev.yml up -d
 # 停止：docker compose -f docker-compose.dev.yml down
 # 清理数据：docker compose -f docker-compose.dev.yml down -v
 # ============================================================
 #
-# 注意：本地开发时，后端 .env 文件需要配置正确的端口
-# DB_PORT=3307（与下方 ports 配置一致）
-# 具体配置请参考 server/.env 文件
+# 注意：本地开发时，后端 .env 需要配置 DB_HOST=127.0.0.1、DB_PORT=3307
+#       （与下方 ports 配置一致）。具体配置参考 server/.env 文件。
+#       首次启动会自动创建主库 rap_beats_dev 和论坛库 rap_beats_forum_dev
+#       （由 docker/mysql-dev-init/01-create-forum-db.sql 提供）。
 # ============================================================
 services:
   # ============================================================
   # 本地 MySQL 数据库（开发专用）
-  # 数据库名：rap_beats_dev
-  # 端口：3307（避免与线上冲突）
+  # 数据库名：rap_beats_dev + rap_beats_forum_dev
+  # 端口：3307（避免与线上冲突，也避免与 Homebrew MySQL 的 3306 冲突）
   # ============================================================
   mysql:
     image: mysql:8.0
@@ -38,6 +40,8 @@ services:
       - "3307:3306"
     volumes:
       - rap-beats-dev-mysql-data:/var/lib/mysql
+      # 首次启动自动创建论坛库（数据目录为空时才执行）
+      - ./docker/mysql-dev-init:/docker-entrypoint-initdb.d:ro
     networks:
       - rap-beats-dev-net
     healthcheck:

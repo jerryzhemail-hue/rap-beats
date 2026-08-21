@@ -4,7 +4,7 @@
 
 - `client`：前端项目，技术栈为 `Vue 3 + Vite + TypeScript`
 - `server`：后端项目，技术栈为 `Express + TypeScript`
-- `server/data`：本地 SQLite 数据文件与本地存储资源目录
+- `server/data`：本地存储资源目录（音频、封面、头像、Banner、论坛附件等，`STORAGE_DRIVER=local` 时使用）
 
 ## 运行环境
 
@@ -12,13 +12,13 @@
 
 - `Node.js` 18 及以上
 - `npm` 9 及以上
-- `MySQL 8/9`，如果你准备使用 MySQL 作为数据库
+- `MySQL 8/9`（项目目前仅支持 MySQL，不再兼容 SQLite）
 
 说明：
 
-- 项目后端同时兼容 `MySQL` 和 `SQLite`
-- 生产或正式开发环境建议使用 `MySQL`
-- 本地临时调试可使用 `SQLite`
+- 项目后端目前仅支持 `MySQL`（`mysql2/promise`）
+- 本地开发使用独立 MySQL（端口 3307 或 3306，看 `.env` 写法）
+- 生产使用 MySQL 容器或独立库
 
 ## 首次安装依赖
 
@@ -36,18 +36,18 @@ npm install
 
 ## 后端环境变量
 
-后端环境变量文件位于 `server/.env`。
+后端环境变量文件位于 `server/.env`（**推荐**，与 README 的所有命令一致）或项目根目录的 `.env`（CWD 启动时会被 dotenv 加载）。
 
-仓库里已经提供了样例文件：
+仓库里提供了样例文件：
 
-- `server/.env.example`
-- `server/.env.mysql.example`
+- `server/.env.example`：MySQL 配置样例
+- `server/.env.mysql.example`：精简 MySQL 样例
 
-### 方案一：使用 MySQL
+### 方案一：使用 MySQL（唯一支持的方式）
 
 推荐方式：
 
-1. 复制 `server/.env.mysql.example` 的内容到 `server/.env`
+1. 复制 `server/.env.example` 的内容到 `server/.env`
 2. 按你的本地数据库配置修改以下字段
 
 ```env
@@ -57,6 +57,7 @@ DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your-password
 DB_NAME=rap_beats
+FORUM_DB_NAME=rap_beats_forum
 ```
 
 如果你还需要支付或 OSS，请继续补充：
@@ -84,23 +85,10 @@ OSS_AUDIO_PREFIX=audio
 OSS_COVER_PREFIX=covers
 OSS_AVATAR_PREFIX=avatars
 OSS_BANNER_PREFIX=banners
-```
-
-### 方案二：使用 SQLite
-
-如果你只是本地快速跑通项目，可以在 `server/.env` 中设置：
-
-```env
-DB_DRIVER=sqlite
-STORAGE_DRIVER=local
-CLIENT_URL=http://localhost:5173
-BASE_URL=http://localhost:3000
-```
-
-SQLite 数据文件会自动写入：
-
-```text
-server/data/beats.db
+OSS_FORUM_IMAGE_PREFIX=forum-images
+OSS_FORUM_AUDIO_PREFIX=forum-audio
+OSS_FORUM_VIDEO_PREFIX=forum-video
+OSS_FORUM_VIDEO_COVER_PREFIX=forum-video-covers
 ```
 
 ## 启动项目

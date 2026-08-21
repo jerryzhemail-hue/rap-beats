@@ -35,7 +35,7 @@ interface PointRecord {
   created_at: string;
 }
 
-type point_reason = string; // SQLite/MySQL compatibility
+type point_reason = string; // MySQL ENUM is enforced at the application layer
 
 /**
  * 统一积分变动函数：写流水 + 更新总额（原子操作，防并发竞态）
