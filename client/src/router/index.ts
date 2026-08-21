@@ -2,7 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import HomeView from '@/views/HomeView.vue'
 import BeatsView from '@/views/BeatsView.vue'
-import BeatDetailView from '@/views/BeatDetailView.vue'
 import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
 
@@ -13,7 +12,7 @@ const router = createRouter({
     { path: '/login', component: LoginView, meta: { guest: true } },
     { path: '/register', component: RegisterView, meta: { guest: true } },
     { path: '/beats', component: BeatsView, meta: { requiresAuth: true } },
-    { path: '/beats/:id', component: BeatDetailView, meta: { requiresAuth: true } },
+    { path: '/beats/:id', component: () => import('@/views/BeatDetailView.vue'), meta: { requiresAuth: true } },
     { path: '/rapper/:id', component: () => import('../views/RapperDetailView.vue') },
     {
       path: '/upload',
@@ -83,6 +82,24 @@ const router = createRouter({
       path: '/points',
       name: 'Points',
       component: () => import('../views/PointsCenterView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/forum/messages',
+      name: 'ForumMessages',
+      component: () => import('../views/MessagesHubView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/forum/user/:userId',
+      name: 'ForumUser',
+      component: () => import('../views/ForumUserView.vue'),
+      meta: { public: true }
+    },
+    {
+      path: '/forum/messages/:conversationId',
+      name: 'ForumChat',
+      component: () => import('../views/MessagesHubView.vue'),
       meta: { requiresAuth: true }
     }
   ],

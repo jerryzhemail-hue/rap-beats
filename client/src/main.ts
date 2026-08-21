@@ -8,10 +8,9 @@ import './style.css'
 const app = createApp(App)
 const pinia = createPinia()
 app.use(pinia)
+app.use(router)
+app.mount('#app')
 
-// 初始化认证状态
+// 认证初始化在 mount 之后异步进行，不阻塞页面渲染和 HMR
 const authStore = useAuthStore()
-authStore.init().then(() => {
-  app.use(router)
-  app.mount('#app')
-})
+authStore.init()

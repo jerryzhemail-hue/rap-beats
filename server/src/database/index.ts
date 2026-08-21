@@ -520,6 +520,80 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
+  // ── 私信功能 ────────────────────────────────────────────────────────────────
+  // 会话表
+  await forumDb.execute(`
+    CREATE TABLE IF NOT EXISTS forum_conversations (
+      id VARCHAR(64) PRIMARY KEY,
+      participant_a INT NOT NULL COMMENT '较小的用户ID',
+      participant_b INT NOT NULL COMMENT '较大的用户ID',
+      last_message_content TEXT,
+      last_message_at DATETIME,
+      unread_count_a INT DEFAULT 0,
+      unread_count_b INT DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uniq_participants (participant_a, participant_b)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // 消息表
+  await forumDb.execute(`
+    CREATE TABLE IF NOT EXISTS forum_messages (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      conversation_id VARCHAR(64) NOT NULL,
+      sender_id INT NOT NULL,
+      receiver_id INT NOT NULL,
+      content TEXT NOT NULL,
+      message_type ENUM('text', 'image', 'system') DEFAULT 'text',
+      is_read TINYINT DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_conversation (conversation_id, created_at),
+      INDEX idx_receiver_unread (receiver_id, is_read),
+      FOREIGN KEY (conversation_id) REFERENCES forum_conversations(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // ── 用户资料与关注功能 ──────────────────────────────────────────────────────
+  // 用户资料表
+  await forumDb.execute(`
+    CREATE TABLE IF NOT EXISTS forum_user_profiles (
+      user_id INT PRIMARY KEY,
+      bio VARCHAR(500) DEFAULT '',
+      location VARCHAR(100) DEFAULT '',
+      website VARCHAR(255) DEFAULT '',
+      social_links JSON,
+      post_count INT DEFAULT 0,
+      follower_count INT DEFAULT 0,
+      following_count INT DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // 关注关系表
+  await forumDb.execute(`
+    CREATE TABLE IF NOT EXISTS forum_follows (
+      follower_id INT NOT NULL,
+      following_id INT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (follower_id, following_id),
+      INDEX idx_following (following_id),
+      INDEX idx_follower (follower_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // 拉黑关系表（单向，user_id 屏蔽了 blocked_user_id）
+  await forumDb.execute(`
+    CREATE TABLE IF NOT EXISTS forum_blocks (
+      user_id INT NOT NULL,
+      blocked_user_id INT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, blocked_user_id),
+      INDEX idx_blocked (blocked_user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   // Remove "综合" (general) category if exists and migrate its posts
   try {
     const [generalCat] = await forumDb.queryMany<{ id: number }>(

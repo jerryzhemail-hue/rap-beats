@@ -17,6 +17,7 @@ import {
   type ForumTopic,
   type ForumPost,
 } from '@/api/forum'
+import UserActions from '@/components/UserActions.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -293,14 +294,36 @@ function nextImage() {
         >
           <!-- 作者信息 -->
           <div class="post-author">
-            <div class="author-avatar">
+            <button
+              v-if="post.user_id"
+              class="author-avatar author-avatar-btn"
+              :title="`查看 ${post.author_username} 的主页`"
+              @click.stop="router.push(`/forum/user/${post.user_id}`)"
+            >
+              <img v-if="post.author_avatar" :src="post.author_avatar" :alt="post.author_username" />
+              <span v-else>{{ getAvatarLetter(post.author_username) }}</span>
+            </button>
+            <div v-else class="author-avatar">
               <img v-if="post.author_avatar" :src="post.author_avatar" :alt="post.author_username" />
               <span v-else>{{ getAvatarLetter(post.author_username) }}</span>
             </div>
             <div class="author-info">
-              <span class="author-name">{{ post.author_username }}</span>
+              <button
+                v-if="post.user_id"
+                class="author-name-btn"
+                @click.stop="router.push(`/forum/user/${post.user_id}`)"
+              >{{ post.author_username }}</button>
+              <span v-else class="author-name">{{ post.author_username }}</span>
               <span class="post-time">{{ post.time_ago }}</span>
             </div>
+            <UserActions
+              v-if="post.user_id"
+              :user-id="post.user_id"
+              :username="post.author_username"
+              compact
+              class="post-card-actions"
+              @click.stop
+            />
             <span class="post-cat-tag">{{ post.category_name }}</span>
           </div>
 
@@ -675,9 +698,33 @@ function nextImage() {
   flex-shrink: 0;
 }
 .author-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.author-avatar-btn {
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.author-avatar-btn:hover {
+  transform: scale(1.06);
+  box-shadow: 0 0 0 2px var(--accent-light, rgba(99, 102, 241, 0.3));
+}
 .author-info { display: flex; flex-direction: column; }
 .author-name { font-size: 13px; font-weight: 600; color: var(--text-primary); line-height: 1.2; }
+.author-name-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+  cursor: pointer;
+  text-align: left;
+}
+.author-name-btn:hover { color: var(--accent); }
 .post-time { font-size: 11px; color: var(--text-secondary); line-height: 1.2; }
+.post-card-actions { margin-left: 8px; }
 .post-cat-tag {
   margin-left: auto;
   font-size: 11px;

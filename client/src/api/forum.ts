@@ -523,3 +523,205 @@ export async function exchangeDownloadWithPoints() {
     method: 'POST',
   });
 }
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 私信功能
+// ════════════════════════════════════════════════════════════════════════════════
+
+export interface ForumMessage {
+  id: number;
+  conversation_id: string;
+  sender_id: number;
+  receiver_id: number;
+  content: string;
+  message_type: 'text' | 'image' | 'system';
+  is_read: number;
+  created_at: string;
+  sender_username?: string;
+  sender_avatar?: string;
+}
+
+export interface ForumConversation {
+  id: string;
+  other_user: {
+    id: number;
+    username: string;
+    avatar_url: string | null;
+  } | null;
+  last_message_content: string;
+  last_message_at: string;
+  unread_count: number;
+}
+
+// 获取会话列表
+export async function fetchMessageConversations() {
+  return request<{ conversations: ForumConversation[] }>('/api/forum/messages/conversations');
+}
+
+// 获取某个会话的消息
+export async function fetchConversationMessages(conversationId: string, params: { page?: number; page_size?: number } = {}) {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.page_size) query.set('page_size', String(params.page_size));
+  return request<{
+    messages: ForumMessage[];
+    pagination: { page: number; page_size: number; total: number; total_pages: number };
+  }>(`/api/forum/messages/${encodeURIComponent(conversationId)}?${query.toString()}`);
+}
+
+// 发送私信
+export async function sendMessage(data: { receiver_id: number; content: string; message_type?: 'text' | 'image' }) {
+  return request<{ message: ForumMessage }>('/api/forum/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+// 标记会话已读
+export async function markConversationRead(conversationId: string) {
+  return request<{ success: boolean }>(`/api/forum/messages/${encodeURIComponent(conversationId)}/read`, {
+    method: 'PUT',
+  });
+}
+
+// 获取未读消息总数
+export async function fetchUnreadMessageCount() {
+  return request<{ unread_count: number }>('/api/forum/messages/unread-count');
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 用户资料与关注功能
+// ════════════════════════════════════════════════════════════════════════════════
+
+export interface ForumUserProfile {
+  user_id: number;
+  bio: string;
+  location: string;
+  website: string;
+  social_links: Record<string, string>;
+  post_count: number;
+  follower_count: number;
+  following_count: number;
+}
+
+export interface ForumUser {
+  id: number;
+  username: string;
+  avatar_url: string | null;
+  forum_profile?: ForumUserProfile;
+}
+
+// 获取用户资料
+export async function fetchForumUser(userId: number) {
+  return request<{ user: ForumUser }>(`/api/forum/users/${userId}`);
+}
+
+// 更新个人资料
+export async function updateForumProfile(data: {
+  bio?: string;
+  location?: string;
+  website?: string;
+  social_links?: Record<string, string>;
+}) {
+  return request<{ profile: ForumUserProfile }>('/api/forum/users/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+// 获取用户发布的帖子列表
+export async function fetchForumUserPosts(userId: number, params: { page?: number; page_size?: number } = {}) {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.page_size) query.set('page_size', String(params.page_size));
+  return request<{
+    posts: ForumPost[];
+    pagination: { page: number; page_size: number; total: number; total_pages: number };
+  }>(`/api/forum/users/${userId}/posts?${query.toString()}`);
+}
+
+// 关注用户
+export async function followUser(userId: number) {
+  return request<{ success: boolean; message: string }>(`/api/forum/users/${userId}/follow`, {
+    method: 'POST',
+  });
+}
+
+// 取消关注
+export async function unfollowUser(userId: number) {
+  return request<{ success: boolean; message: string }>(`/api/forum/users/${userId}/follow`, {
+    method: 'DELETE',
+  });
+}
+
+// 检查关注状态
+export async function fetchFollowStatus(userId: number) {
+  return request<{ is_following: boolean; is_followed_by: boolean }>(`/api/forum/users/${userId}/follow-status`);
+}
+
+// 获取粉丝列表
+export async function fetchUserFollowers(userId: number, params: { page?: number; page_size?: number } = {}) {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.page_size) query.set('page_size', String(params.page_size));
+  return request<{
+    followers: Array<{ id: number; username: string; avatar_url: string | null; followed_at: string }>;
+    pagination: { page: number; page_size: number; total: number; total_pages: number };
+  }>(`/api/forum/users/${userId}/followers?${query.toString()}`);
+}
+
+// 获取关注列表
+export async function fetchUserFollowings(userId: number, params: { page?: number; page_size?: number } = {}) {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.page_size) query.set('page_size', String(params.page_size));
+  return request<{
+    followings: Array<{ id: number; username: string; avatar_url: string | null; followed_at: string }>;
+    pagination: { page: number; page_size: number; total: number; total_pages: number };
+  }>(`/api/forum/users/${userId}/followings?${query.toString()}`);
+}
+
+// 删除会话
+export async function deleteConversation(conversationId: string) {
+  return request<{ success: boolean }>(
+    `/api/forum/messages/${encodeURIComponent(conversationId)}`,
+    { method: 'DELETE' }
+  );
+}
+
+// 拉黑用户
+export async function blockUser(userId: number) {
+  return request<{ success: boolean; already?: boolean }>(`/api/forum/blocks/${userId}`, {
+    method: 'POST',
+  });
+}
+
+// 取消拉黑
+export async function unblockUser(userId: number) {
+  return request<{ success: boolean }>(`/api/forum/blocks/${userId}`, {
+    method: 'DELETE',
+  });
+}
+
+// 拉黑状态
+export async function fetchBlockStatus(userId: number) {
+  return request<{ blocked_by_me: boolean; blocked_me: boolean }>(
+    `/api/forum/blocks/${userId}/status`
+  );
+}
+
+// 拉黑列表
+export async function fetchBlockList() {
+  return request<{
+    users: Array<{ id: number; username: string; avatar_url: string | null }>;
+  }>(`/api/forum/blocks`);
+}
+
+// 搜索全站用户（用于私信发起聊天）
+export async function searchUsers(query: string, limit = 20) {
+  return request<{
+    users: Array<{ id: number; username: string; avatar_url: string | null }>;
+  }>(`/api/users/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+}

@@ -8,6 +8,7 @@ import { createRateLimiter } from '../middleware/rateLimit.js';
 import { requireAuth, optionalAuth, AuthRequest } from '../middleware/auth.js';
 import { createDirectUploadTarget, saveBuffer, supportsDirectUpload } from '../services/storage.js';
 import { suggestTopics } from '../services/topicEngine.js';
+import { addClient, removeClient, pushToUser } from '../services/messageEvents.js';
 
 // 从主库批量查询用户信息（用于跨库 enrichment）
 async function enrichWithUsers<T extends { user_id: number }>(
@@ -111,6 +112,11 @@ const exchangeLimiter = createRateLimiter({
   windowMs: 60_000,
   max: 5,
   message: '兑换过于频繁，请在1分钟后重试',
+});
+const messageLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 30,
+  message: '发送消息过于频繁，请稍后再试',
 });
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1947,6 +1953,875 @@ router.post('/forum/upload-video', uploadLimiter, requireAuth, forumVideoUpload.
     file_size: req.file.size,
     max_size: MAX_VIDEO_SIZE,
     max_duration: VIDEO_MAX_DURATION,
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 私信功能
+// ════════════════════════════════════════════════════════════════════════════════
+
+interface ForumMessage {
+  id: number;
+  conversation_id: string;
+  sender_id: number;
+  receiver_id: number;
+  content: string;
+  message_type: 'text' | 'image' | 'system';
+  is_read: number;
+  created_at: Date;
+}
+
+interface ForumConversation {
+  id: string;
+  participant_a: number;
+  participant_b: number;
+  last_message_content: string;
+  last_message_at: Date;
+  unread_count_a: number;
+  unread_count_b: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+// 生成会话 ID：确保同一对用户只有一个会话
+function generateConversationId(userId1: number, userId2: number): string {
+  const a = Math.min(userId1, userId2);
+  const b = Math.max(userId1, userId2);
+  return `${a}_${b}`;
+}
+
+// 获取会话的另一个参与者信息
+async function getOtherParticipant(conversation: ForumConversation, currentUserId: number, mainDb: ReturnType<typeof getDatabaseClient>): Promise<{ id: number; username: string; avatar_url: string } | null> {
+  const otherId = conversation.participant_a === currentUserId ? conversation.participant_b : conversation.participant_a;
+  return (await mainDb.queryOne<{ id: number; username: string; avatar_url: string }>(
+    'SELECT id, username, avatar_url FROM users WHERE id = ?',
+    [otherId]
+  )) ?? null;
+}
+
+// 获取会话列表
+router.get('/forum/messages/conversations', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const userId = req.user!.id;
+
+  const conversations = await db.queryMany<ForumConversation>(
+    `SELECT * FROM forum_conversations
+     WHERE participant_a = ? OR participant_b = ?
+     ORDER BY last_message_at DESC`,
+    [userId, userId]
+  );
+
+  const result = await Promise.all(conversations.map(async (conv) => {
+    const other = await getOtherParticipant(conv, userId, mainDb);
+    const unreadCount = conv.participant_a === userId ? conv.unread_count_a : conv.unread_count_b;
+    return {
+      id: conv.id,
+      other_user: other,
+      last_message_content: conv.last_message_content,
+      last_message_at: conv.last_message_at,
+      unread_count: unreadCount,
+    };
+  }));
+
+  res.json({ conversations: result });
+});
+
+// 获取未读消息总数（必须在 :conversationId 之前）
+router.get('/forum/messages/unread-count', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const userId = req.user!.id;
+
+  const result = await db.queryOne<{ total: number }>(
+    `SELECT CAST(COALESCE(SUM(
+      CASE WHEN participant_a = ? THEN unread_count_a ELSE unread_count_b END
+    ), 0) AS SIGNED) as total
+    FROM forum_conversations
+    WHERE participant_a = ? OR participant_b = ?`,
+    [userId, userId, userId]
+  );
+
+  res.json({ unread_count: Number(result?.total ?? 0) });
+});
+
+// 实时私信推送（SSE）—— 必须注册在 /:conversationId 之前，否则 stream 会被当作会话 ID
+// 鉴权用 ?token= query（EventSource 不支持自定义请求头）
+router.get('/forum/messages/stream', requireAuth, (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  addClient(userId, res);
+
+  // 客户端断开连接时清理，避免内存泄漏与向已关闭的 res 写入
+  req.on('close', () => {
+    removeClient(userId, res);
+  });
+});
+
+// 获取某个会话的消息列表
+router.get('/forum/messages/:conversationId', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const { conversationId } = req.params;
+  const userId = req.user!.id;
+  const { page = '1', page_size = '50' } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, parseInt(page));
+  const pageSize = Math.min(100, Math.max(1, parseInt(page_size)));
+  const offset = (pageNum - 1) * pageSize;
+
+  // 验证用户是该会话的参与者
+  const conversation = await db.queryOne<ForumConversation>(
+    'SELECT * FROM forum_conversations WHERE id = ? AND (participant_a = ? OR participant_b = ?)',
+    [conversationId, userId, userId]
+  );
+
+  if (!conversation) {
+    return res.status(404).json({ error: '会话不存在或无权访问' });
+  }
+
+  // 获取消息
+  const messages = await db.queryMany<ForumMessage>(
+    `SELECT * FROM forum_messages
+     WHERE conversation_id = ?
+     ORDER BY created_at DESC
+     LIMIT ? OFFSET ?`,
+    [conversationId, pageSize, offset]
+  );
+
+  // 统计总消息数
+  const [{ count }] = await db.queryMany<{ count: number }>(
+    'SELECT COUNT(*) as count FROM forum_messages WHERE conversation_id = ?',
+    [conversationId]
+  );
+
+  // 使用 mainDb 获取发送者信息
+  const senderIds = [...new Set(messages.map(m => m.sender_id))];
+  const senders = senderIds.length > 0
+    ? await mainDb.queryMany<{ id: number; username: string; avatar_url: string }>(
+        `SELECT id, username, avatar_url FROM users WHERE id IN (${senderIds.map(() => '?').join(',')})`,
+        senderIds
+      )
+    : [];
+  const senderMap = new Map(senders.map(s => [s.id, s]));
+
+  const enrichedMessages = messages.map(m => ({
+    ...m,
+    sender_username: senderMap.get(m.sender_id)?.username,
+    sender_avatar: senderMap.get(m.sender_id)?.avatar_url,
+  }));
+
+  res.json({
+    messages: enrichedMessages.reverse(), // 按时间正序
+    pagination: {
+      page: pageNum,
+      page_size: pageSize,
+      total: count,
+      total_pages: Math.ceil(count / pageSize),
+    },
+  });
+});
+
+// 发送私信
+router.post('/forum/messages', requireAuth, messageLimiter, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const senderId = req.user!.id;
+  const { receiver_id, content, message_type = 'text' } = req.body as {
+    receiver_id?: number;
+    content?: string;
+    message_type?: 'text' | 'image';
+  };
+
+  if (!receiver_id || !content?.trim()) {
+    return res.status(400).json({ error: '请填写收件人和内容' });
+  }
+
+  if (senderId === receiver_id) {
+    return res.status(400).json({ error: '不能给自己发私信' });
+  }
+
+  // 验证收件人存在
+  const receiver = await mainDb.queryOne<{ id: number }>('SELECT id FROM users WHERE id = ?', [receiver_id]);
+  if (!receiver) {
+    return res.status(404).json({ error: '收件人不存在' });
+  }
+
+  // 黑名单检查：被对方拉黑或我已拉黑对方都不能发
+  const blocked = await db.queryOne<{ user_id: number }>(
+    'SELECT user_id FROM forum_blocks WHERE user_id = ? AND blocked_user_id = ?',
+    [receiver_id, senderId]
+  );
+  if (blocked) {
+    return res.status(403).json({ error: '你已被对方拉黑，无法发送消息' });
+  }
+  const blockedByMe = await db.queryOne<{ user_id: number }>(
+    'SELECT user_id FROM forum_blocks WHERE user_id = ? AND blocked_user_id = ?',
+    [senderId, receiver_id]
+  );
+  if (blockedByMe) {
+    return res.status(403).json({ error: '你已拉黑该用户，无法发送消息' });
+  }
+
+  // 关注关系检查：互不关注时新消息最多 1 条
+  const [iFollow, theyFollow] = await Promise.all([
+    db.queryOne<{ follower_id: number }>(
+      'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
+      [senderId, receiver_id]
+    ),
+    db.queryOne<{ follower_id: number }>(
+      'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
+      [receiver_id, senderId]
+    ),
+  ]);
+
+  if (!iFollow && !theyFollow) {
+    const conversationId = generateConversationId(senderId, receiver_id);
+    const theirReply = await db.queryOne<{ id: number }>(
+      `SELECT id FROM forum_messages
+       WHERE conversation_id = ? AND sender_id = ? AND message_type = 'text' LIMIT 1`,
+      [conversationId, receiver_id]
+    );
+    const myTextCount = await db.queryOne<{ c: number }>(
+      `SELECT COUNT(*) as c FROM forum_messages
+       WHERE conversation_id = ? AND sender_id = ? AND message_type = 'text'`,
+      [conversationId, senderId]
+    );
+    if (!theirReply && (myTextCount?.c || 0) >= 1) {
+      return res.status(429).json({
+        error: '由于对方并未关注你，在收到对方回复之前，你最多只能发送 1 条文字消息',
+      });
+    }
+  }
+
+  const conversationId = generateConversationId(senderId, receiver_id);
+
+  // 获取或创建会话
+  let conversation = await db.queryOne<ForumConversation>(
+    'SELECT * FROM forum_conversations WHERE id = ?',
+    [conversationId]
+  );
+
+  if (!conversation) {
+    await db.execute(
+      'INSERT INTO forum_conversations (id, participant_a, participant_b, last_message_content, last_message_at) VALUES (?, ?, ?, ?, NOW())',
+      [conversationId, Math.min(senderId, receiver_id), Math.max(senderId, receiver_id), content.slice(0, 200)]
+    );
+    conversation = await db.queryOne<ForumConversation>(
+      'SELECT * FROM forum_conversations WHERE id = ?',
+      [conversationId]
+    );
+  } else {
+    // 更新会话
+    await db.execute(
+      'UPDATE forum_conversations SET last_message_content = ?, last_message_at = NOW() WHERE id = ?',
+      [content.slice(0, 200), conversationId]
+    );
+  }
+
+  // 插入消息
+  const result = await db.execute(
+    'INSERT INTO forum_messages (conversation_id, sender_id, receiver_id, content, message_type) VALUES (?, ?, ?, ?, ?)',
+    [conversationId, senderId, receiver_id, content, message_type]
+  );
+
+  // 更新未读计数
+  const isSenderA = conversation!.participant_a === senderId;
+  const unreadField = isSenderA ? 'unread_count_b' : 'unread_count_a';
+  await db.execute(
+    `UPDATE forum_conversations SET ${unreadField} = ${unreadField} + 1 WHERE id = ?`,
+    [conversationId]
+  );
+
+  const message = await db.queryOne<ForumMessage>(
+    'SELECT * FROM forum_messages WHERE id = ?',
+    [(result as any).insertId]
+  );
+
+  // 实时推送：向在线接收者推送新消息事件（SSE）
+  // 附带发送者信息，便于前端直接渲染气泡，无需二次查询
+  if (message) {
+    const senderInfo = await mainDb.queryOne<{ username: string; avatar_url: string }>(
+      'SELECT username, avatar_url FROM users WHERE id = ?',
+      [senderId]
+    );
+    const enrichedMessage = {
+      ...message,
+      sender_username: senderInfo?.username,
+      sender_avatar: senderInfo?.avatar_url,
+    };
+    pushToUser(receiver_id, 'message', {
+      conversation_id: conversationId,
+      sender_id: senderId,
+      sender_username: senderInfo?.username,
+      sender_avatar: senderInfo?.avatar_url,
+      message: enrichedMessage,
+    });
+    res.status(201).json({ message: enrichedMessage });
+  } else {
+    res.status(201).json({ message });
+  }
+});
+
+// 标记会话已读
+router.put('/forum/messages/:conversationId/read', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const { conversationId } = req.params;
+  const userId = req.user!.id;
+
+  // 验证用户是该会话的参与者
+  const conversation = await db.queryOne<ForumConversation>(
+    'SELECT * FROM forum_conversations WHERE id = ? AND (participant_a = ? OR participant_b = ?)',
+    [conversationId, userId, userId]
+  );
+
+  if (!conversation) {
+    return res.status(404).json({ error: '会话不存在或无权访问' });
+  }
+
+  // 标记所有消息为已读
+  await db.execute(
+    'UPDATE forum_messages SET is_read = 1 WHERE conversation_id = ? AND receiver_id = ? AND is_read = 0',
+    [conversationId, userId]
+  );
+
+  // 重置未读计数
+  const isSenderA = conversation.participant_a === userId;
+  const unreadField = isSenderA ? 'unread_count_a' : 'unread_count_b';
+  await db.execute(
+    `UPDATE forum_conversations SET ${unreadField} = 0 WHERE id = ?`,
+    [conversationId]
+  );
+
+  res.json({ success: true });
+});
+
+// 删除会话（自己侧）
+router.delete('/forum/messages/:conversationId', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const userId = req.user!.id;
+  const raw = req.params.conversationId;
+  const conversationId = decodeURIComponent(Array.isArray(raw) ? raw[0] : raw);
+
+  const conversation = await db.queryOne<ForumConversation>(
+    'SELECT * FROM forum_conversations WHERE id = ? AND (participant_a = ? OR participant_b = ?)',
+    [conversationId, userId, userId]
+  );
+
+  if (!conversation) {
+    return res.status(404).json({ error: '会话不存在或无权访问' });
+  }
+
+  // 删除会话（消息级联删除由 FK ON DELETE CASCADE 处理）
+  await db.execute('DELETE FROM forum_conversations WHERE id = ?', [conversationId]);
+
+  res.json({ success: true });
+});
+
+// 拉黑用户
+router.post('/forum/blocks/:userId', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const userId = req.user!.id;
+  const targetId = parseInt(
+    Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId
+  );
+
+  if (isNaN(targetId)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+  if (userId === targetId) {
+    return res.status(400).json({ error: '不能拉黑自己' });
+  }
+
+  const existing = await db.queryOne(
+    'SELECT user_id FROM forum_blocks WHERE user_id = ? AND blocked_user_id = ?',
+    [userId, targetId]
+  );
+  if (existing) {
+    return res.json({ success: true, already: true });
+  }
+
+  await db.execute(
+    'INSERT INTO forum_blocks (user_id, blocked_user_id) VALUES (?, ?)',
+    [userId, targetId]
+  );
+  res.json({ success: true });
+});
+
+// 取消拉黑
+router.delete('/forum/blocks/:userId', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const userId = req.user!.id;
+  const targetId = parseInt(
+    Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId
+  );
+
+  if (isNaN(targetId)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+
+  await db.execute(
+    'DELETE FROM forum_blocks WHERE user_id = ? AND blocked_user_id = ?',
+    [userId, targetId]
+  );
+  res.json({ success: true });
+});
+
+// 检查我对某用户的拉黑状态
+router.get('/forum/blocks/:userId/status', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const userId = req.user!.id;
+  const targetId = parseInt(
+    Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId
+  );
+
+  if (isNaN(targetId)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+
+  const [blockedByMe, blockedMe] = await Promise.all([
+    db.queryOne<{ user_id: number }>(
+      'SELECT user_id FROM forum_blocks WHERE user_id = ? AND blocked_user_id = ?',
+      [userId, targetId]
+    ),
+    db.queryOne<{ user_id: number }>(
+      'SELECT user_id FROM forum_blocks WHERE user_id = ? AND blocked_user_id = ?',
+      [targetId, userId]
+    ),
+  ]);
+
+  res.json({
+    blocked_by_me: !!blockedByMe,
+    blocked_me: !!blockedMe,
+  });
+});
+
+// 拉黑列表
+router.get('/forum/blocks', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const userId = req.user!.id;
+
+  const blocks = await db.queryMany<{ blocked_user_id: number; created_at: Date }>(
+    'SELECT blocked_user_id, created_at FROM forum_blocks WHERE user_id = ? ORDER BY created_at DESC',
+    [userId]
+  );
+
+  if (blocks.length === 0) {
+    return res.json({ users: [] });
+  }
+
+  const userIds = blocks.map((b) => b.blocked_user_id);
+  const placeholders = userIds.map(() => '?').join(',');
+  const users = await mainDb.queryMany<{ id: number; username: string; avatar_url: string | null }>(
+    `SELECT id, username, avatar_url FROM users WHERE id IN (${placeholders})`,
+    userIds
+  );
+
+  res.json({ users });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 用户资料与关注功能
+// ════════════════════════════════════════════════════════════════════════════════
+
+interface ForumUserProfile {
+  user_id: number;
+  bio: string;
+  location: string;
+  website: string;
+  social_links: string;
+  post_count: number;
+  follower_count: number;
+  following_count: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface ForumUser {
+  id: number;
+  username: string;
+  avatar_url: string;
+  email?: string;
+  role?: string;
+  vip_level?: string;
+  forum_profile?: ForumUserProfile;
+}
+
+// 获取用户资料
+router.get('/forum/users/:userId', async (req, res) => {
+  const mainDb = getDatabaseClient();
+  const forumDb = getForumDatabaseClient();
+  const userIdParam = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+
+  const userIdNum = parseInt(userIdParam);
+  if (isNaN(userIdNum)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+
+  const user = await mainDb.queryOne<Omit<ForumUser, 'forum_profile'>>(
+    'SELECT id, username, avatar_url FROM users WHERE id = ?',
+    [userIdNum]
+  );
+
+  if (!user) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+
+  // 获取论坛资料
+  let profile = await forumDb.queryOne<ForumUserProfile>(
+    'SELECT * FROM forum_user_profiles WHERE user_id = ?',
+    [userIdNum]
+  );
+
+  // 如果没有资料，创建一个默认的
+  if (!profile) {
+    await forumDb.execute(
+      'INSERT INTO forum_user_profiles (user_id) VALUES (?)',
+      [userIdNum]
+    );
+    profile = await forumDb.queryOne<ForumUserProfile>(
+      'SELECT * FROM forum_user_profiles WHERE user_id = ?',
+      [userIdNum]
+    );
+  }
+
+  res.json({
+    user: {
+      ...user,
+      forum_profile: {
+        ...profile,
+        social_links: profile?.social_links ? JSON.parse(profile.social_links as unknown as string) : {},
+      },
+    },
+  });
+});
+
+// 更新当前用户资料
+router.put('/forum/users/profile', requireAuth, async (req: AuthRequest, res) => {
+  const forumDb = getForumDatabaseClient();
+  const userId = req.user!.id;
+  const { bio, location, website, social_links } = req.body as {
+    bio?: string;
+    location?: string;
+    website?: string;
+    social_links?: Record<string, string>;
+  };
+
+  // 验证字段长度
+  if (bio && bio.length > 500) {
+    return res.status(400).json({ error: '简介不能超过500字' });
+  }
+  if (location && location.length > 100) {
+    return res.status(400).json({ error: '所在地不能超过100字' });
+  }
+  if (website && website.length > 255) {
+    return res.status(400).json({ error: '个人网站不能超过255字' });
+  }
+
+  await forumDb.execute(
+    `INSERT INTO forum_user_profiles (user_id, bio, location, website, social_links)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       bio = COALESCE(?, bio),
+       location = COALESCE(?, location),
+       website = COALESCE(?, website),
+       social_links = COALESCE(?, social_links)`,
+    [userId, bio || null, location || null, website || null, social_links ? JSON.stringify(social_links) : null, bio, location, website, social_links ? JSON.stringify(social_links) : null]
+  );
+
+  const profile = await forumDb.queryOne<ForumUserProfile>(
+    'SELECT * FROM forum_user_profiles WHERE user_id = ?',
+    [userId]
+  );
+
+  res.json({
+    profile: {
+      ...profile,
+      social_links: profile?.social_links ? JSON.parse(profile.social_links as unknown as string) : {},
+    },
+  });
+});
+
+// 获取用户发布的帖子列表
+router.get('/forum/users/:userId/posts', async (req: AuthRequest, res) => {
+  const forumDb = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const userIdParam = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+  const { page = '1', page_size = '20' } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, parseInt(page));
+  const pageSize = Math.min(50, Math.max(1, parseInt(page_size)));
+  const offset = (pageNum - 1) * pageSize;
+
+  const userIdNum = parseInt(userIdParam);
+  if (isNaN(userIdNum)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+
+  const [{ total }] = await forumDb.queryMany<{ total: number }>(
+    'SELECT COUNT(*) as total FROM forum_posts WHERE user_id = ? AND status = ?',
+    [userIdNum, 'published']
+  );
+
+  const posts = await forumDb.queryMany<any>(
+    `SELECT fp.*, fc.name as category_name, fc.slug as category_slug
+     FROM forum_posts fp
+     LEFT JOIN forum_categories fc ON fp.category_id = fc.id
+     WHERE fp.user_id = ? AND fp.status = 'published'
+     ORDER BY fp.created_at DESC
+     LIMIT ? OFFSET ?`,
+    [userIdNum, pageSize, offset]
+  );
+
+  // 补充用户信息
+  const enrichedPosts = await enrichWithUsers(posts, mainDb);
+
+  res.json({
+    posts: enrichedPosts,
+    pagination: {
+      page: pageNum,
+      page_size: pageSize,
+      total,
+      total_pages: Math.ceil(total / pageSize),
+    },
+  });
+});
+
+// 关注用户
+router.post('/forum/users/:userId/follow', requireAuth, async (req: AuthRequest, res) => {
+  const forumDb = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const followerId = req.user!.id;
+  const userIdParam = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+
+  const followingId = parseInt(userIdParam);
+  if (isNaN(followingId)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+
+  if (followerId === followingId) {
+    return res.status(400).json({ error: '不能关注自己' });
+  }
+
+  // 验证目标用户存在
+  const targetUser = await mainDb.queryOne<{ id: number }>('SELECT id FROM users WHERE id = ?', [followingId]);
+  if (!targetUser) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+
+  // 黑名单检查：任一方拉黑另一方则不能关注
+  const blocked = await forumDb.queryOne<{ user_id: number }>(
+    `SELECT user_id FROM forum_blocks
+     WHERE (user_id = ? AND blocked_user_id = ?) OR (user_id = ? AND blocked_user_id = ?)`,
+    [followerId, followingId, followingId, followerId]
+  );
+  if (blocked) {
+    return res.status(403).json({ error: '由于拉黑关系，无法关注该用户' });
+  }
+
+  // 检查是否已关注
+  const existing = await forumDb.queryOne<{ follower_id: number }>(
+    'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
+    [followerId, followingId]
+  );
+
+  if (existing) {
+    return res.status(409).json({ error: '已经关注过了' });
+  }
+
+  // 创建关注关系
+  await forumDb.execute(
+    'INSERT INTO forum_follows (follower_id, following_id) VALUES (?, ?)',
+    [followerId, followingId]
+  );
+
+  // 更新关注数和粉丝数（INSERT OR UPDATE 确保 profile 存在）
+  await forumDb.execute(
+    `INSERT INTO forum_user_profiles (user_id, following_count) VALUES (?, 1)
+     ON DUPLICATE KEY UPDATE following_count = following_count + 1`,
+    [followerId]
+  );
+  await forumDb.execute(
+    `INSERT INTO forum_user_profiles (user_id, follower_count) VALUES (?, 1)
+     ON DUPLICATE KEY UPDATE follower_count = follower_count + 1`,
+    [followingId]
+  );
+
+  res.status(201).json({ success: true, message: '关注成功' });
+});
+
+// 取消关注
+router.delete('/forum/users/:userId/follow', requireAuth, async (req: AuthRequest, res) => {
+  const forumDb = getForumDatabaseClient();
+  const followerId = req.user!.id;
+  const userIdParam = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+
+  const followingId = parseInt(userIdParam);
+  if (isNaN(followingId)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+
+  // 检查是否有关注关系
+  const existing = await forumDb.queryOne<{ follower_id: number }>(
+    'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
+    [followerId, followingId]
+  );
+
+  if (!existing) {
+    return res.status(404).json({ error: '未关注该用户' });
+  }
+
+  // 删除关注关系
+  await forumDb.execute(
+    'DELETE FROM forum_follows WHERE follower_id = ? AND following_id = ?',
+    [followerId, followingId]
+  );
+
+  // 更新关注数和粉丝数（INSERT OR UPDATE 确保 profile 存在，COALESCE 防负数）
+  await forumDb.execute(
+    `INSERT INTO forum_user_profiles (user_id, following_count) VALUES (?, 0)
+     ON DUPLICATE KEY UPDATE following_count = GREATEST(0, following_count - 1)`,
+    [followerId]
+  );
+  await forumDb.execute(
+    `INSERT INTO forum_user_profiles (user_id, follower_count) VALUES (?, 0)
+     ON DUPLICATE KEY UPDATE follower_count = GREATEST(0, follower_count - 1)`,
+    [followingId]
+  );
+
+  res.json({ success: true, message: '已取消关注' });
+});
+
+// 检查关注状态
+router.get('/forum/users/:userId/follow-status', requireAuth, async (req: AuthRequest, res) => {
+  const forumDb = getForumDatabaseClient();
+  const followerId = req.user!.id;
+  const userIdParam = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+
+  const followingId = parseInt(userIdParam);
+  if (isNaN(followingId)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+
+  const [isFollowing, isFollowedBy] = await Promise.all([
+    forumDb.queryOne<{ follower_id: number }>(
+      'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
+      [followerId, followingId]
+    ),
+    forumDb.queryOne<{ follower_id: number }>(
+      'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
+      [followingId, followerId]
+    ),
+  ]);
+
+  res.json({
+    is_following: !!isFollowing,
+    is_followed_by: !!isFollowedBy,
+  });
+});
+
+// 获取用户粉丝列表
+router.get('/forum/users/:userId/followers', async (req: AuthRequest, res) => {
+  const forumDb = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const userIdParam = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+  const { page = '1', page_size = '20' } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, parseInt(page));
+  const pageSize = Math.min(50, Math.max(1, parseInt(page_size)));
+  const offset = (pageNum - 1) * pageSize;
+
+  const userIdNum = parseInt(userIdParam);
+  if (isNaN(userIdNum)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+
+  const [{ total }] = await forumDb.queryMany<{ total: number }>(
+    'SELECT COUNT(*) as total FROM forum_follows WHERE following_id = ?',
+    [userIdNum]
+  );
+
+  const followers = await forumDb.queryMany<{ follower_id: number; created_at: Date }>(
+    `SELECT follower_id, created_at FROM forum_follows
+     WHERE following_id = ?
+     ORDER BY created_at DESC
+     LIMIT ? OFFSET ?`,
+    [userIdNum, pageSize, offset]
+  );
+
+  // 获取用户信息
+  const userIds = followers.map(f => f.follower_id);
+  const users = userIds.length > 0
+    ? await mainDb.queryMany<{ id: number; username: string; avatar_url: string }>(
+        `SELECT id, username, avatar_url FROM users WHERE id IN (${userIds.map(() => '?').join(',')})`,
+        userIds
+      )
+    : [];
+
+  const userMap = new Map(users.map(u => [u.id, u]));
+  const result = followers.map(f => ({
+    ...userMap.get(f.follower_id),
+    followed_at: f.created_at,
+  }));
+
+  res.json({
+    followers: result,
+    pagination: {
+      page: pageNum,
+      page_size: pageSize,
+      total,
+      total_pages: Math.ceil(total / pageSize),
+    },
+  });
+});
+
+// 获取用户关注列表
+router.get('/forum/users/:userId/followings', async (req: AuthRequest, res) => {
+  const forumDb = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const userIdParam = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;
+  const { page = '1', page_size = '20' } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, parseInt(page));
+  const pageSize = Math.min(50, Math.max(1, parseInt(page_size)));
+  const offset = (pageNum - 1) * pageSize;
+
+  const userIdNum = parseInt(userIdParam);
+  if (isNaN(userIdNum)) {
+    return res.status(400).json({ error: '无效的用户ID' });
+  }
+
+  const [{ total }] = await forumDb.queryMany<{ total: number }>(
+    'SELECT COUNT(*) as total FROM forum_follows WHERE follower_id = ?',
+    [userIdNum]
+  );
+
+  const followings = await forumDb.queryMany<{ following_id: number; created_at: Date }>(
+    `SELECT following_id, created_at FROM forum_follows
+     WHERE follower_id = ?
+     ORDER BY created_at DESC
+     LIMIT ? OFFSET ?`,
+    [userIdNum, pageSize, offset]
+  );
+
+  // 获取用户信息
+  const userIds = followings.map(f => f.following_id);
+  const users = userIds.length > 0
+    ? await mainDb.queryMany<{ id: number; username: string; avatar_url: string }>(
+        `SELECT id, username, avatar_url FROM users WHERE id IN (${userIds.map(() => '?').join(',')})`,
+        userIds
+      )
+    : [];
+
+  const userMap = new Map(users.map(u => [u.id, u]));
+  const result = followings.map(f => ({
+    ...userMap.get(f.following_id),
+    followed_at: f.created_at,
+  }));
+
+  res.json({
+    followings: result,
+    pagination: {
+      page: pageNum,
+      page_size: pageSize,
+      total,
+      total_pages: Math.ceil(total / pageSize),
+    },
   });
 });
 

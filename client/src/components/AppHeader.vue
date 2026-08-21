@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useMessagesStore } from '@/stores/messages'
 import { resolveAvatarUrl } from '@/utils/assets'
 import AuthPromptModal from './AuthPromptModal.vue'
 
@@ -12,8 +13,12 @@ const emit = defineEmits<{
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const messagesStore = useMessagesStore()
 const showAuthPrompt = ref(false)
 const showThemePicker = ref(false)
+
+// 未读私信数：由全局 SSE store 单点维护，不再各自轮询
+const unreadMessageCount = computed(() => messagesStore.unreadCount)
 
 const themes = [
   { id: 'dark', name: '深色', icon: '🌙' },
@@ -29,8 +34,13 @@ onMounted(() => {
   const saved = localStorage.getItem('theme') || 'dark'
   currentTheme.value = saved
   document.documentElement.setAttribute('data-theme', saved)
-  
+
   document.addEventListener('click', handleOutsideClick)
+
+  // 登录状态下补偿拉取一次未读数（SSE 连接由 App.vue 维护）
+  if (authStore.isAuthenticated) {
+    messagesStore.refreshUnreadCount()
+  }
 })
 
 onUnmounted(() => {
@@ -117,6 +127,14 @@ const avatarSrc = computed(() => {
           </button>
         </div>
         <template v-if="authStore.isAuthenticated">
+          <RouterLink to="/forum/messages" class="message-btn" :title="'私信'" aria-label="私信">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path fill="currentColor" d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/>
+            </svg>
+            <span v-if="unreadMessageCount > 0" class="unread-dot" aria-label="未读消息">
+              {{ unreadMessageCount > 99 ? '99+' : unreadMessageCount }}
+            </span>
+          </RouterLink>
           <router-link to="/profile" class="header-avatar" aria-label="进入个人中心">
             <img v-if="avatarSrc" :src="avatarSrc" :alt="`${authStore.user?.username || '用户'}头像`" class="header-avatar-image" />
             <span v-else>{{ avatarLetter }}</span>
@@ -332,6 +350,44 @@ const avatarSrc = computed(() => {
 .membership-btn:hover {
   border-color: #7c3aed;
   background: rgba(124, 58, 237, 0.1);
+}
+
+.message-btn {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-primary, #e8e8ed);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+.message-btn:hover {
+  border-color: var(--accent, #6366f1);
+  color: var(--accent, #6366f1);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.unread-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg-secondary);
 }
 
 .theme-picker {

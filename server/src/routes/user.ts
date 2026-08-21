@@ -276,4 +276,38 @@ router.get('/user/vip-status', requireAuth, async (req: AuthRequest, res) => {
   });
 });
 
+// GET /api/users/search — 搜索全站用户（用于私信发起聊天）
+router.get('/users/search', requireAuth, async (req: AuthRequest, res) => {
+  const db = getDatabaseClient();
+  const q = (req.query.q as string || '').trim();
+  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
+
+  if (!q) {
+    return res.json({ users: [] });
+  }
+
+  // rap_beats_dev.users 表字段：id, username, email, password_hash, role,
+  // created_at, is_vip, vip_expire_at, vip_level, avatar_url
+  // 排除自己，按用户名/邮箱模糊匹配，精确匹配优先
+  const users = await db.queryMany<{ id: number; username: string; email: string; avatar_url: string }>(
+    `SELECT id, username, email, avatar_url
+       FROM users
+      WHERE id != ?
+        AND (username LIKE ? OR email LIKE ?)
+      ORDER BY
+        CASE WHEN username = ? THEN 0
+             WHEN username LIKE ? THEN 1
+             ELSE 2 END,
+        id ASC
+      LIMIT ?`,
+    [req.user!.id, `%${q}%`, `%${q}%`, q, `${q}%`, limit]
+  );
+
+  res.json({ users: users.map(u => ({
+    id: u.id,
+    username: u.username || u.email,
+    avatar_url: u.avatar_url || null,
+  })) });
+});
+
 export default router;

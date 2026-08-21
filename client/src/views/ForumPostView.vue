@@ -17,6 +17,7 @@ import {
   type ForumPost,
   type ForumComment,
 } from '@/api/forum'
+import UserActions from '@/components/UserActions.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -219,13 +220,33 @@ function getAvatarLetter(username: string) {
 
       <!-- 作者行 -->
       <div class="post-author-row">
-        <div class="author-avatar">
+        <button
+          v-if="post.user_id"
+          class="author-avatar author-avatar-btn"
+          :title="`查看 ${post.author_username} 的主页`"
+          @click="router.push(`/forum/user/${post.user_id}`)"
+        >
+          <img v-if="post.author_avatar" :src="post.author_avatar" :alt="post.author_username" />
+          <span v-else>{{ getAvatarLetter(post.author_username) }}</span>
+        </button>
+        <div v-else class="author-avatar">
           <img v-if="post.author_avatar" :src="post.author_avatar" :alt="post.author_username" />
           <span v-else>{{ getAvatarLetter(post.author_username) }}</span>
         </div>
         <div class="author-info">
-          <span class="author-name">{{ post.author_username }}</span>
+          <button
+            v-if="post.user_id"
+            class="author-name-btn"
+            @click="router.push(`/forum/user/${post.user_id}`)"
+          >{{ post.author_username }}</button>
+          <span v-else class="author-name">{{ post.author_username }}</span>
           <span class="post-date">{{ post.time_ago }}</span>
+        </div>
+        <div class="post-author-actions">
+          <UserActions
+            :user-id="post.user_id"
+            :username="post.author_username"
+          />
         </div>
         <div class="post-stats">
           <span>👁 {{ post.view_count }}</span>
@@ -347,14 +368,34 @@ function getAvatarLetter(username: string) {
       <!-- 评论列表 -->
       <div class="comments-list">
         <div v-for="comment in comments" :key="comment.id" class="comment-item">
-          <div class="comment-avatar">
+          <button
+            v-if="comment.user_id"
+            class="comment-avatar comment-avatar-btn"
+            :title="`查看 ${comment.author_username} 的主页`"
+            @click="router.push(`/forum/user/${comment.user_id}`)"
+          >
+            <img v-if="comment.author_avatar" :src="comment.author_avatar" :alt="comment.author_username" />
+            <span v-else>{{ getAvatarLetter(comment.author_username) }}</span>
+          </button>
+          <div v-else class="comment-avatar">
             <img v-if="comment.author_avatar" :src="comment.author_avatar" :alt="comment.author_username" />
             <span v-else>{{ getAvatarLetter(comment.author_username) }}</span>
           </div>
           <div class="comment-body">
             <div class="comment-header">
-              <span class="comment-author">{{ comment.author_username }}</span>
+              <button
+                v-if="comment.user_id"
+                class="comment-author-btn"
+                @click="router.push(`/forum/user/${comment.user_id}`)"
+              >{{ comment.author_username }}</button>
+              <span v-else class="comment-author">{{ comment.author_username }}</span>
               <span class="comment-time">{{ comment.time_ago }}</span>
+              <UserActions
+                :user-id="comment.user_id"
+                :username="comment.author_username"
+                compact
+                class="comment-user-actions"
+              />
               <button
                 v-if="canDelete(comment.user_id)"
                 class="comment-delete"
@@ -392,14 +433,34 @@ function getAvatarLetter(username: string) {
             <!-- 子回复 -->
             <div v-if="comment.replies?.length" class="replies-list">
               <div v-for="reply in comment.replies" :key="reply.id" class="reply-item">
-                <div class="comment-avatar avatar-sm">
+                <button
+                  v-if="reply.user_id"
+                  class="comment-avatar avatar-sm comment-avatar-btn"
+                  :title="`查看 ${reply.author_username} 的主页`"
+                  @click="router.push(`/forum/user/${reply.user_id}`)"
+                >
+                  <img v-if="reply.author_avatar" :src="reply.author_avatar" :alt="reply.author_username" />
+                  <span v-else>{{ getAvatarLetter(reply.author_username) }}</span>
+                </button>
+                <div v-else class="comment-avatar avatar-sm">
                   <img v-if="reply.author_avatar" :src="reply.author_avatar" :alt="reply.author_username" />
                   <span v-else>{{ getAvatarLetter(reply.author_username) }}</span>
                 </div>
                 <div class="comment-body">
                   <div class="comment-header">
-                    <span class="comment-author">{{ reply.author_username }}</span>
+                    <button
+                      v-if="reply.user_id"
+                      class="comment-author-btn"
+                      @click="router.push(`/forum/user/${reply.user_id}`)"
+                    >{{ reply.author_username }}</button>
+                    <span v-else class="comment-author">{{ reply.author_username }}</span>
                     <span class="comment-time">{{ reply.time_ago }}</span>
+                    <UserActions
+                      :user-id="reply.user_id"
+                      :username="reply.author_username"
+                      compact
+                      class="comment-user-actions"
+                    />
                     <button
                       v-if="canDelete(reply.user_id)"
                       class="comment-delete"
@@ -496,16 +557,45 @@ function getAvatarLetter(username: string) {
   flex-shrink: 0;
 }
 .author-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.author-avatar-btn {
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.author-avatar-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 0 2px var(--accent-light, rgba(99, 102, 241, 0.3));
+}
 .avatar-sm { width: 28px; height: 28px; font-size: 12px; }
 .author-info { display: flex; flex-direction: column; }
 .author-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.author-name-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+.author-name-btn:hover { color: var(--accent); }
 .post-date { font-size: 12px; color: var(--text-secondary); }
+.post-author-actions {
+  display: flex;
+  align-items: center;
+}
 .post-stats {
   margin-left: auto;
   display: flex;
   gap: 12px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+.post-author-row {
+  flex-wrap: wrap;
 }
 
 .post-topics {
@@ -777,6 +867,16 @@ function getAvatarLetter(username: string) {
   color: #fff;
   flex-shrink: 0;
 }
+.comment-avatar-btn {
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.comment-avatar-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 0 2px var(--accent-light, rgba(99, 102, 241, 0.3));
+}
 .comment-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .comment-input-wrap { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .comment-textarea {
@@ -813,8 +913,21 @@ function getAvatarLetter(username: string) {
 .comments-list { display: flex; flex-direction: column; gap: 20px; }
 .comment-item { display: flex; gap: 12px; }
 .comment-body { flex: 1; }
-.comment-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.comment-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
 .comment-author { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.comment-author-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+.comment-author-btn:hover { color: var(--accent); }
+.comment-user-actions { margin-left: auto; }
 .comment-time { font-size: 12px; color: var(--text-secondary); }
 .comment-delete {
   font-size: 11px;
