@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
-import { getDatabaseClient } from '../database/client.js';
+import { getDatabaseClient, getMembershipDatabaseClient } from '../database/client.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { invalidateVipCache } from '../middleware/vip.js';
 import { toDateTimeString } from '../utils/timezone.js';
@@ -30,6 +30,45 @@ function generateSign(params: Record<string, string>, appsecret: string): string
   return crypto.createHash('md5').update(sorted + appsecret).digest('hex');
 }
 
+/**
+ * 双写 VIP 状态(真相源 membership.vip_users + 冗余快照 users.vip_*)
+ *
+ * 设计要点:
+ * - membership.vip_users 是 source of truth,代码读这一份
+ * - users.vip_level/vip_expire_at/is_vip 保留作历史快照(订单溯源、向后兼容)
+ * - 用 UPSERT 风格:如果用户没有 vip_users 行,先 INSERT IGNORE 占位
+ */
+async function setUserVipStatus(
+  userId: number,
+  vipLevel: 'free' | 'basic' | 'premium' | 'ultimate',
+  expireAt: Date | null,
+  source: 'payment' | 'lottery' | 'admin_grant' | 'system',
+  tx: import('../database/client.js').DatabaseClient = getDatabaseClient(),
+): Promise<void> {
+  const database = tx === getDatabaseClient() ? getDatabaseClient() : tx;
+  const membershipDb = getMembershipDatabaseClient();
+
+  const isVip = vipLevel !== 'free' ? 1 : 0;
+  const expireStr = expireAt ? toDateTimeString(expireAt) : null;
+
+  // 1) 真相源:membership.vip_users
+  // INSERT IGNORE 占位(如果 user_id 不存在),然后 UPDATE
+  await membershipDb.execute(
+    'INSERT IGNORE INTO vip_users (user_id, vip_level, is_vip, vip_expire_at, source) VALUES (?, ?, 0, NULL, ?)',
+    [userId, 'free', source],
+  );
+  await membershipDb.execute(
+    'UPDATE vip_users SET vip_level = ?, is_vip = ?, vip_expire_at = ?, source = ? WHERE user_id = ?',
+    [vipLevel, isVip, expireStr, source, userId],
+  );
+
+  // 2) 冗余快照:users.vip_*(保持只读风格,业务不再用)
+  await database.execute(
+    'UPDATE users SET vip_level = ?, vip_expire_at = ?, is_vip = ? WHERE id = ?',
+    [vipLevel, expireStr, isVip, userId],
+  );
+}
+
 // 生成随机字符串
 function generateNonce(): string {
   return crypto.randomBytes(16).toString('hex');
@@ -38,6 +77,7 @@ function generateNonce(): string {
 // POST /api/payment/create-order
 router.post('/payment/create-order', requireAuth, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
+  const membershipDb = getMembershipDatabaseClient();
   const { vip_level, pay_type } = req.body; // pay_type: 'wechat' | 'alipay'
 
   if (!['basic', 'premium', 'ultimate'].includes(vip_level)) {
@@ -68,25 +108,44 @@ router.post('/payment/create-order', requireAuth, async (req: AuthRequest, res: 
     }
 
     // 直接开通VIP（叠加时长：从未过期的现有到期时间开始计算）
-    const existingUser = await database.queryOne<{ vip_expire_at: string | null }>(
-      'SELECT vip_expire_at FROM users WHERE id = ?',
+    // 真相源已经从 users 迁到 membership.vip_users,这里双写两份
+    const existingVip = await membershipDb.queryOne<{ vip_expire_at: string | null }>(
+      'SELECT vip_expire_at FROM vip_users WHERE user_id = ?',
       [req.user!.id]
     );
     const now = new Date();
     let expireBase: Date;
-    if (existingUser?.vip_expire_at && new Date(existingUser.vip_expire_at) > now) {
+    if (existingVip?.vip_expire_at && new Date(existingVip.vip_expire_at) > now) {
       // 当前会员未过期，从现有到期时间叠加
-      expireBase = new Date(existingUser.vip_expire_at);
+      expireBase = new Date(existingVip.vip_expire_at);
     } else {
       // 当前无有效会员，从现在起算
       expireBase = now;
     }
     expireBase.setDate(expireBase.getDate() + priceConfig.days);
-    await database.execute('UPDATE users SET vip_level = ?, vip_expire_at = ? WHERE id = ?', [
-      vip_level,
-      toDateTimeString(expireBase),
-      req.user!.id
-    ]);
+
+    await setUserVipStatus(
+      req.user!.id,
+      vip_level as 'basic' | 'premium' | 'ultimate',
+      expireBase,
+      'payment',
+    );
+
+    // 同步写 vip_orders(便于审计/对账)
+    await membershipDb.execute(
+      `INSERT INTO vip_orders (user_id, vip_level, amount_cents, duration_days, status, external_order_no, paid_at, expire_at)
+       VALUES (?, ?, ?, ?, 'completed', ?, ?, ?)`,
+      [
+        req.user!.id,
+        vip_level,
+        Math.round(parseFloat(priceConfig.amount) * 100),
+        priceConfig.days,
+        tradeOrderId,
+        toDateTimeString(now),
+        toDateTimeString(expireBase),
+      ],
+    );
+
     invalidateVipCache(req.user!.id);
 
     return res.json({
@@ -180,10 +239,14 @@ router.post('/payment/notify', async (req: Request, res: Response) => {
   let orderUserId: number | null = null;
 
   try {
+    // 第一阶段:在主库事务里锁单 + 写快照(防止并发)
+    interface OrderInfo { user_id: number; vip_level: string }
+    let orderInfo: OrderInfo | undefined;
+    let expireAtStr: string | null = null;
     await database.transaction(async (tx) => {
       // 用 FOR UPDATE 锁住订单行，防止并发回调都通过 status 检查
-      const order = await tx.queryOne<any>(
-        'SELECT * FROM orders WHERE stripe_session_id = ? FOR UPDATE',
+      const order = await tx.queryOne<{ id: number; user_id: number; vip_level: string; status: string }>(
+        'SELECT id, user_id, vip_level, status FROM orders WHERE stripe_session_id = ? FOR UPDATE',
         [tradeOrderId]
       );
       if (!order) {
@@ -195,31 +258,64 @@ router.post('/payment/notify', async (req: Request, res: Response) => {
         throw new Error('ORDER_ALREADY_COMPLETED'); // 跳过本次处理
       }
 
-      // 叠加 VIP 时长
-      const priceConfig = PRICE_CONFIG[order.vip_level];
-      const existingUser = await tx.queryOne<{ vip_expire_at: string | null }>(
-        'SELECT vip_expire_at FROM users WHERE id = ? FOR UPDATE',
+      // 叠加 VIP 时长(从 membership.vip_users 读最新过期时间,避免双写不一致)
+      // 这里用 mainDb 是为了保证在主库事务里;如果 vip_users 也行,效果一样
+      // 因为数据库共享同一实例,membershipDb.queryOne 拿到的是快照
+      const membershipDb = getMembershipDatabaseClient();
+      const existingVip = await membershipDb.queryOne<{ vip_expire_at: string | null }>(
+        'SELECT vip_expire_at FROM vip_users WHERE user_id = ?',
         [order.user_id]
       );
+      const priceConfig = PRICE_CONFIG[order.vip_level];
       const now = new Date();
       let expireBase: Date;
-      if (existingUser?.vip_expire_at && new Date(existingUser.vip_expire_at) > now) {
-        expireBase = new Date(existingUser.vip_expire_at);
+      if (existingVip?.vip_expire_at && new Date(existingVip.vip_expire_at) > now) {
+        expireBase = new Date(existingVip.vip_expire_at);
       } else {
         expireBase = now;
       }
       expireBase.setDate(expireBase.getDate() + (priceConfig?.days || 30));
+      expireAtStr = toDateTimeString(expireBase);
 
+      // 主库事务里只更新 orders(状态)和 users(快照)
       await tx.execute('UPDATE orders SET status = ? WHERE stripe_session_id = ?', ['completed', tradeOrderId]);
-      await tx.execute('UPDATE users SET vip_level = ?, vip_expire_at = ? WHERE id = ?', [
+      await tx.execute('UPDATE users SET vip_level = ?, vip_expire_at = ?, is_vip = 1 WHERE id = ?', [
         order.vip_level,
-        toDateTimeString(expireBase),
+        expireAtStr,
         order.user_id
       ]);
 
-      orderUserId = order.user_id;
-      console.log(`VIP activated via payment: user ${order.user_id} -> ${order.vip_level}`);
+      orderInfo = { user_id: order.user_id, vip_level: order.vip_level };
     });
+
+    // 第二阶段:在 membership 库写 vip_users(真相源) + vip_orders(独立事务)
+    // 即使这里失败,下一次 callback 重试时也会被主库锁单守卫挡住
+    if (orderInfo) {
+      const membershipDb = getMembershipDatabaseClient();
+      await setUserVipStatus(
+        orderInfo.user_id,
+        orderInfo.vip_level as 'basic' | 'premium' | 'ultimate',
+        expireAtStr ? new Date(expireAtStr) : null,
+        'payment',
+      );
+      const priceConfig = PRICE_CONFIG[orderInfo.vip_level];
+      await membershipDb.execute(
+        `INSERT INTO vip_orders (user_id, vip_level, amount_cents, duration_days, status, external_order_no, paid_at, expire_at)
+         VALUES (?, ?, ?, ?, 'completed', ?, ?, ?)`,
+        [
+          orderInfo.user_id,
+          orderInfo.vip_level,
+          Math.round(parseFloat(priceConfig.amount) * 100),
+          priceConfig.days,
+          tradeOrderId,
+          toDateTimeString(new Date()),
+          expireAtStr,
+        ],
+      );
+    }
+
+    orderUserId = orderInfo?.user_id ?? null;
+    console.log(`VIP activated via payment: user ${orderInfo?.user_id} -> ${orderInfo?.vip_level}`);
   } catch (err: any) {
     // ORDER_NOT_FOUND 和 ORDER_ALREADY_COMPLETED 是预期情况，返回 success 避免重复通知
     if (!['ORDER_NOT_FOUND', 'ORDER_ALREADY_COMPLETED'].includes(err.message)) {

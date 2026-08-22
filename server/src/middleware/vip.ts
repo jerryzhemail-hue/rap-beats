@@ -1,5 +1,5 @@
 import { AuthRequest } from './auth.js';
-import { getDatabaseClient } from '../database/client.js';
+import { getDatabaseClient, getMembershipDatabaseClient } from '../database/client.js';
 import { getLocalDateString } from '../utils/timezone.js';
 
 export type VipLevel = 'free' | 'basic' | 'premium' | 'ultimate';
@@ -93,22 +93,23 @@ export async function getUserVipLevel(req: AuthRequest): Promise<VipLevel> {
   const cached = getCachedVipLevel(userId);
   if (cached !== null) return cached;
 
-  const database = getDatabaseClient();
-  const user = await database.queryOne<{ role: string | null; vip_level: string | null; vip_expire_at: string | null }>(
-    'SELECT role, vip_level, vip_expire_at FROM users WHERE id = ?',
+  // VIP 真相源在 membership.vip_users
+  const membershipDb = getMembershipDatabaseClient();
+  const vip = await membershipDb.queryOne<{ is_vip: number; vip_level: string | null; vip_expire_at: string | null }>(
+    'SELECT is_vip, vip_level, vip_expire_at FROM vip_users WHERE user_id = ?',
     [userId]
   );
-  if (!user) return 'free';
-
-  const level = getEffectiveVipLevel(user);
-  if (level === 'free') {
+  if (!vip || vip.is_vip !== 1) {
     setCachedVipLevel(userId, 'free');
     return 'free';
   }
 
+  const level = normalizeVipLevel(vip.vip_level);
+
   // Check expiration
-  if (user.vip_expire_at && new Date(user.vip_expire_at) < new Date()) {
-    await database.execute("UPDATE users SET vip_level = 'free' WHERE id = ?", [userId]);
+  if (vip.vip_expire_at && new Date(vip.vip_expire_at) < new Date()) {
+    // 过期时同步把 vip_users 标记为 free(真相源),users.vip_* 字段保持只读快照不动
+    await membershipDb.execute("UPDATE vip_users SET vip_level = 'free', is_vip = 0 WHERE user_id = ?", [userId]);
     setCachedVipLevel(userId, 'free');
     return 'free';
   }

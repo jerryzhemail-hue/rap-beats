@@ -5,7 +5,7 @@ import multer from 'multer';
 import path from 'path';
 import { Readable } from 'stream';
 import { type Beat } from '../database/index.js';
-import { getDatabaseClient, getForumDatabaseClient } from '../database/client.js';
+import { getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient } from '../database/client.js';
 import { requireAuth, optionalAuth, AuthRequest } from '../middleware/auth.js';
 import { createRateLimiter } from '../middleware/rateLimit.js';
 import {
@@ -582,6 +582,7 @@ router.post('/beats/:id/license/agree', requireAuth, async (req: AuthRequest, re
 router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
   const forumDb = getForumDatabaseClient();
+  const membershipDb = getMembershipDatabaseClient();
   const beat = await database.queryOne<BeatRecord>('SELECT * FROM beats WHERE id = ?', [req.params.id]);
   if (!beat) {
     res.status(404).json({ error: 'Beat not found' });
@@ -627,8 +628,8 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
     }
 
     // 查询是否有未使用的积分下载权限
-    const permission = await forumDb.queryOne<{ id: number }>(
-      'SELECT id FROM forum_point_download_permissions WHERE user_id = ? AND used = 0 LIMIT 1',
+    const permission = await membershipDb.queryOne<{ id: number }>(
+      'SELECT id FROM point_download_permissions WHERE user_id = ? AND used = 0 LIMIT 1',
       [req.user!.id]
     );
 
@@ -641,8 +642,8 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
     }
 
     // 标记权限已使用
-    await forumDb.execute(
-      'UPDATE forum_point_download_permissions SET used = 1, used_at = ? WHERE id = ?',
+    await membershipDb.execute(
+      'UPDATE point_download_permissions SET used = 1, used_at = ? WHERE id = ?',
       [toDateTimeString(new Date()), permission.id]
     );
     usedPointPermission = true;

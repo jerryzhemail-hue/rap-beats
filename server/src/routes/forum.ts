@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import fs from 'fs';
-import { getDatabaseClient, getForumDatabaseClient } from '../database/client.js';
+import { getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient } from '../database/client.js';
 import { changePoints, getPointTransactions, getTotalPoints, POINT_REWARDS, getAvailableReward, POINT_LEVEL_CONFIG } from '../services/points.js';
 import { invalidateVipCache } from '../middleware/vip.js';
 import { createRateLimiter } from '../middleware/rateLimit.js';
@@ -1002,8 +1002,10 @@ async function checkAndGrantMilestone(db: ReturnType<typeof getForumDatabaseClie
     if (consecutiveDays === milestone) {
       // 使用本地时区的今天（与签到表一致）
       const todayLocal = getLocalDateString();
-      const existing = await db.queryOne<{ id: number }>(
-        'SELECT id FROM forum_point_transactions WHERE user_id = ? AND reason = ? AND DATE(created_at) = ?',
+      // milestone 写在 point_transactions(积分流水表),已迁移到 membershipDb
+      const membershipDb = getMembershipDatabaseClient();
+      const existing = await membershipDb.queryOne<{ id: number }>(
+        'SELECT id FROM point_transactions WHERE user_id = ? AND reason = ? AND DATE(created_at) = ?',
         [userId, 'sign_in_milestone', todayLocal]
       );
       if (!existing) {
@@ -1080,8 +1082,10 @@ router.get('/forum/sign-in/status', requireAuth, async (req: AuthRequest, res) =
 
     const consecutiveDays = await calcConsecutiveDays(db, req.user!.id);
 
-    const pointsRow = await db.queryOne<{ total_points: number }>(
-      'SELECT total_points FROM forum_user_points WHERE user_id = ?',
+    // 积分余额从 membershipDb 读
+    const membershipDb = getMembershipDatabaseClient();
+    const pointsRow = await membershipDb.queryOne<{ total_points: number }>(
+      'SELECT total_points FROM user_points WHERE user_id = ?',
       [req.user!.id]
     );
 
@@ -1205,12 +1209,12 @@ function formatDateTime(date = new Date()) {
 }
 
 async function getTodayLotteryCount(userId: number) {
-  const db = getForumDatabaseClient();
+  const db = getMembershipDatabaseClient();
   // 统一使用本地时区
   const today = getLocalDateString();
   const row = await db.queryOne<{ count: number }>(
     `SELECT COUNT(*) as count
-     FROM forum_point_transactions
+     FROM point_transactions
      WHERE user_id = ?
        AND reason IN ('lottery_cost', 'lottery_participation', 'lottery')
        AND DATE(created_at) = ?`,
@@ -1502,11 +1506,12 @@ router.post('/forum/points/exchange', exchangeLimiter, requireAuth, async (req: 
 router.get('/forum/points/download-permission', requireAuth, async (req: AuthRequest, res) => {
   try {
     const totalPoints = await getTotalPoints(req.user!.id);
-    const db = getForumDatabaseClient();
+    // 积分下载权限已迁到 membershipDb
+    const db = getMembershipDatabaseClient();
 
     // 查询用户已购买的下载权限次数（每次兑换生成一条记录）
     const purchased = await db.queryMany<{ id: number }>(
-      'SELECT id FROM forum_point_download_permissions WHERE user_id = ? AND used = 0',
+      'SELECT id FROM point_download_permissions WHERE user_id = ? AND used = 0',
       [req.user!.id]
     );
 
@@ -1523,7 +1528,7 @@ router.get('/forum/points/download-permission', requireAuth, async (req: AuthReq
 // POST /api/forum/points/exchange-download — 积分兑换单次下载权限
 router.post('/forum/points/exchange-download', exchangeLimiter, requireAuth, async (req: AuthRequest, res) => {
   try {
-    const db = getForumDatabaseClient();
+    const db = getMembershipDatabaseClient();
     const cost = DOWNLOAD_EXCHANGE_COST;
 
     // 1. 检查积分是否足够
@@ -1545,7 +1550,7 @@ router.post('/forum/points/exchange-download', exchangeLimiter, requireAuth, asy
 
     // 3. 写入下载权限记录
     await db.execute(
-      'INSERT INTO forum_point_download_permissions (user_id, created_at) VALUES (?, ?)',
+      'INSERT INTO point_download_permissions (user_id, created_at) VALUES (?, ?)',
       [req.user!.id, formatDateTime()]
     );
 

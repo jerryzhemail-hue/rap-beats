@@ -1,4 +1,4 @@
-import { getForumDatabaseClient } from '../database/index.js';
+import { getMembershipDatabaseClient } from '../database/index.js';
 import { getLocalDateString, toDateTimeString } from '../utils/timezone.js';
 
 // 积分变动原因枚举
@@ -44,7 +44,7 @@ export async function changePoints(options: PointChangeOptions): Promise<number>
   const { userId, amount, reason, description } = options;
   if (amount === 0) return getTotalPoints(userId);
 
-  const db = getForumDatabaseClient();
+  const db = getMembershipDatabaseClient();
 
   try {
     // 使用事务保证原子性
@@ -52,7 +52,7 @@ export async function changePoints(options: PointChangeOptions): Promise<number>
       // 1. 扣减时校验余额（用 FOR UPDATE 锁行；如果行不存在则视为余额不足拒绝）
       if (amount < 0) {
         const row = await tx.queryOne<{ total_points: number }>(
-          'SELECT total_points FROM forum_user_points WHERE user_id = ? FOR UPDATE',
+          'SELECT total_points FROM user_points WHERE user_id = ? FOR UPDATE',
           [userId]
         );
         if (!row || row.total_points + amount < 0) {
@@ -62,7 +62,7 @@ export async function changePoints(options: PointChangeOptions): Promise<number>
 
       // 2. 写入流水
       await tx.execute(
-        `INSERT INTO forum_point_transactions (user_id, \`change\`, reason, description, created_at)
+        `INSERT INTO point_transactions (user_id, \`change\`, reason, description, created_at)
          VALUES (?, ?, ?, ?, ?)`,
         [userId, amount, reason, description ?? reason, toDateTimeString(new Date())]
       );
@@ -70,11 +70,11 @@ export async function changePoints(options: PointChangeOptions): Promise<number>
       // 3. 更新用户积分总额：INSERT IGNORE 防重复插入，UPDATE 做原子加减
       // 注意：INSERT IGNORE 在主键冲突时静默忽略，但行不存在时会插入（amount<0时不会走到这里）
       await tx.execute(
-        'INSERT IGNORE INTO forum_user_points (user_id, total_points, updated_at) VALUES (?, 0, ?)',
+        'INSERT IGNORE INTO user_points (user_id, total_points, updated_at) VALUES (?, 0, ?)',
         [userId, toDateTimeString(new Date())]
       );
       await tx.execute(
-        'UPDATE forum_user_points SET total_points = total_points + ?, updated_at = ? WHERE user_id = ?',
+        'UPDATE user_points SET total_points = total_points + ?, updated_at = ? WHERE user_id = ?',
         [amount, toDateTimeString(new Date()), userId]
       );
     });
@@ -90,9 +90,9 @@ export async function changePoints(options: PointChangeOptions): Promise<number>
  * 获取用户当前积分总额
  */
 export async function getTotalPoints(userId: number): Promise<number> {
-  const db = getForumDatabaseClient();
+  const db = getMembershipDatabaseClient();
   const row = await db.queryOne<{ total_points: number }>(
-    'SELECT total_points FROM forum_user_points WHERE user_id = ?',
+    'SELECT total_points FROM user_points WHERE user_id = ?',
     [userId]
   );
   return row?.total_points ?? 0;
@@ -106,14 +106,14 @@ export async function getPointTransactions(
   limit = 20,
   offset = 0
 ): Promise<{ records: PointRecord[]; total: number }> {
-  const db = getForumDatabaseClient();
+  const db = getMembershipDatabaseClient();
   const [countRow, records] = await Promise.all([
     db.queryOne<{ count: number }>(
-      'SELECT COUNT(*) as count FROM forum_point_transactions WHERE user_id = ?',
+      'SELECT COUNT(*) as count FROM point_transactions WHERE user_id = ?',
       [userId]
     ),
     db.queryMany<PointRecord>(
-      `SELECT * FROM forum_point_transactions
+      `SELECT * FROM point_transactions
        WHERE user_id = ?
        ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
@@ -195,12 +195,12 @@ export async function getTodayPointsByReason(
   userId: number,
   reason: PointRewardKey
 ): Promise<number> {
-  const db = getForumDatabaseClient();
+  const db = getMembershipDatabaseClient();
   // 统一使用本地时区的今天
   const today = getLocalDateString();
   const row = await db.queryOne<{ total: number }>(
     `SELECT COALESCE(SUM(\`change\`), 0) as total
-     FROM forum_point_transactions
+     FROM point_transactions
      WHERE user_id = ? AND reason = ? AND DATE(created_at) = ?`,
     [userId, reason, today]
   );

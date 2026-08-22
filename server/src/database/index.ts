@@ -16,11 +16,15 @@
  * - 数据迁移逻辑(比如 remove general category、sync topics)
  *   放在 init 函数末尾,幂等执行
  */
-import { getDatabaseClient, getForumDatabaseClient, initMySqlDatabaseClientFromEnv } from './client.js';
+import { getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient, initMySqlDatabaseClientFromEnv } from './client.js';
 
-export { getDatabaseClient, getForumDatabaseClient, initMySqlDatabaseClientFromEnv };
+export { getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient, initMySqlDatabaseClientFromEnv };
 
-export async function initDatabase(db: import('./client.js').DatabaseClient, forumDb: import('./client.js').DatabaseClient) {
+export async function initDatabase(
+  db: import('./client.js').DatabaseClient,
+  forumDb: import('./client.js').DatabaseClient,
+  membershipDb: import('./client.js').DatabaseClient,
+) {
 
   // rappers 表
   await db.execute(`
@@ -354,6 +358,111 @@ export async function initDatabase(db: import('./client.js').DatabaseClient, for
 
   // ─── 论坛数据库初始化 ───────────────────────────────────────────────────────
   await initForumDatabase(forumDb);
+
+  // ─── 会员数据库初始化(积分 + VIP) ────────────────────────────────────────
+  await initMembershipDatabase(membershipDb);
+}
+
+async function initMembershipDatabase(membershipDb: import('./client.js').DatabaseClient) {
+  // 用户积分余额表(从 forum_user_points 迁移而来)
+  await membershipDb.execute(`
+    CREATE TABLE IF NOT EXISTS user_points (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL UNIQUE,
+      total_points INT DEFAULT 0,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // 积分流水表(从 forum_point_transactions 迁移而来)
+  await membershipDb.execute(`
+    CREATE TABLE IF NOT EXISTS point_transactions (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      \`change\` INT NOT NULL,
+      reason VARCHAR(50) NOT NULL,
+      description VARCHAR(255) DEFAULT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_user_time (user_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // 积分兑换下载权限表(从 forum_point_download_permissions 迁移而来)
+  await membershipDb.execute(`
+    CREATE TABLE IF NOT EXISTS point_download_permissions (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      used TINYINT(1) DEFAULT 0,
+      used_at TIMESTAMP NULL DEFAULT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_user_unused (user_id, used),
+      INDEX idx_user_time (user_id, created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // VIP 用户状态表(真相源 source of truth)
+  await membershipDb.execute(`
+    CREATE TABLE IF NOT EXISTS vip_users (
+      user_id INT NOT NULL,
+      vip_level VARCHAR(20) NOT NULL DEFAULT 'free',
+      is_vip TINYINT(1) NOT NULL DEFAULT 0,
+      vip_expire_at DATETIME NULL,
+      source ENUM('payment','lottery','admin_grant','system') NOT NULL DEFAULT 'payment',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id),
+      KEY idx_level_expire (vip_level, vip_expire_at),
+      KEY idx_is_vip (is_vip)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // VIP 订单表(从 orders 提取 vip_level!='free' 的)
+  await membershipDb.execute(`
+    CREATE TABLE IF NOT EXISTS vip_orders (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      vip_level VARCHAR(20) NOT NULL,
+      amount_cents INT NOT NULL DEFAULT 0,
+      duration_days INT NOT NULL DEFAULT 30,
+      status ENUM('pending','paid','completed','refunded','cancelled') NOT NULL DEFAULT 'pending',
+      external_order_no VARCHAR(100) DEFAULT NULL,
+      paid_at DATETIME NULL,
+      expire_at DATETIME NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_user (user_id),
+      INDEX idx_status (status),
+      INDEX idx_external (external_order_no)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // VIP 等级字典
+  await membershipDb.execute(`
+    CREATE TABLE IF NOT EXISTS vip_levels (
+      level VARCHAR(20) PRIMARY KEY,
+      display_name VARCHAR(50) NOT NULL,
+      duration_days INT NOT NULL,
+      price_cents INT NOT NULL,
+      description VARCHAR(255) DEFAULT '',
+      sort_order INT NOT NULL DEFAULT 0
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // Seed VIP 等级字典(幂等)
+  const existingLevels = await membershipDb.queryMany<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM vip_levels');
+  if ((existingLevels[0]?.cnt ?? 0) === 0) {
+    const levels = [
+      { level: 'free',     display_name: '免费用户', duration_days: 0,   price_cents: 0,     description: '默认等级,无任何特权', sort_order: 0 },
+      { level: 'basic',    display_name: '基础会员', duration_days: 30,  price_cents: 2900,  description: '基础下载权限 / 普通音质', sort_order: 1 },
+      { level: 'premium',  display_name: '高级会员', duration_days: 30,  price_cents: 5900,  description: '无损音质 / 抢先听', sort_order: 2 },
+      { level: 'ultimate', display_name: '至尊会员', duration_days: 365, price_cents: 29900, description: '全部权限 / 商用授权', sort_order: 3 },
+    ];
+    for (const lv of levels) {
+      await membershipDb.execute(
+        'INSERT INTO vip_levels (level, display_name, duration_days, price_cents, description, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+        [lv.level, lv.display_name, lv.duration_days, lv.price_cents, lv.description, lv.sort_order],
+      );
+    }
+  }
 }
 
 async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) {
@@ -497,28 +606,7 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
-  await forumDb.execute(`
-    CREATE TABLE IF NOT EXISTS forum_user_points (
-      id INT PRIMARY KEY AUTO_INCREMENT,
-      user_id INT NOT NULL UNIQUE,
-      total_points INT DEFAULT 0,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await forumDb.execute(`
-    CREATE TABLE IF NOT EXISTS forum_point_transactions (
-      id INT PRIMARY KEY AUTO_INCREMENT,
-      user_id INT NOT NULL,
-      \`change\` INT NOT NULL,
-      reason VARCHAR(50) NOT NULL,
-      description VARCHAR(255) DEFAULT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_user_time (user_id, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  // 积分抽奖记录表
+  // 积分抽奖记录表（vip_days 是快照字段,VIP 状态由 membership.vip_users 主导）
   await forumDb.execute(`
     CREATE TABLE IF NOT EXISTS forum_lottery_records (
       id INT PRIMARY KEY AUTO_INCREMENT,
@@ -531,18 +619,8 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
-  // 积分兑换下载权限记录表
-  await forumDb.execute(`
-    CREATE TABLE IF NOT EXISTS forum_point_download_permissions (
-      id INT PRIMARY KEY AUTO_INCREMENT,
-      user_id INT NOT NULL,
-      used TINYINT(1) DEFAULT 0,
-      used_at TIMESTAMP NULL DEFAULT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_user_unused (user_id, used),
-      INDEX idx_user_time (user_id, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
+  // forum_user_points / forum_point_transactions / forum_point_download_permissions
+  // 已迁移到 rap_beats_membership 库,这里不再初始化
 
   // ── 私信功能 ────────────────────────────────────────────────────────────────
   // 会话表

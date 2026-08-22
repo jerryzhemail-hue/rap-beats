@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { requireAdmin, AuthRequest } from '../middleware/auth.js';
-import { getDatabaseClient, getForumDatabaseClient } from '../database/client.js';
+import { getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient } from '../database/client.js';
 import { deleteStoredAsset } from '../services/storage.js';
 import { invalidateVipCache } from '../middleware/vip.js';
 import { detectBpmFromUrl, detectBpmFromFile } from '../services/bpmDetector.js';
@@ -235,6 +235,7 @@ router.delete('/admin/users/:id', requireAdmin, async (req: AuthRequest, res) =>
 
   // 删除用户相关数据
   const forumDb = getForumDatabaseClient();
+  const membershipDb = getMembershipDatabaseClient();
   await database.transaction(async (tx) => {
     await tx.execute('DELETE FROM comments WHERE user_id = ?', [id]);
     await tx.execute('DELETE FROM favorites WHERE user_id = ?', [id]);
@@ -252,10 +253,10 @@ router.delete('/admin/users/:id', requireAdmin, async (req: AuthRequest, res) =>
   await forumDb.execute('DELETE FROM forum_likes WHERE user_id = ?', [id]);
   await forumDb.execute('DELETE FROM forum_favorites WHERE user_id = ?', [id]);
   await forumDb.execute('DELETE FROM forum_sign_ins WHERE user_id = ?', [id]);
-  await forumDb.execute('DELETE FROM forum_user_points WHERE user_id = ?', [id]);
-  await forumDb.execute('DELETE FROM forum_point_transactions WHERE user_id = ?', [id]);
+  await membershipDb.execute('DELETE FROM user_points WHERE user_id = ?', [id]);
+  await membershipDb.execute('DELETE FROM point_transactions WHERE user_id = ?', [id]);
   await forumDb.execute('DELETE FROM forum_lottery_records WHERE user_id = ?', [id]);
-  await forumDb.execute('DELETE FROM forum_point_download_permissions WHERE user_id = ?', [id]);
+  await membershipDb.execute('DELETE FROM point_download_permissions WHERE user_id = ?', [id]);
   await forumDb.execute('DELETE FROM forum_comment_likes WHERE user_id = ?', [id]);
   await deleteStoredAsset('avatar', user.avatar_url);
 
@@ -266,39 +267,45 @@ router.delete('/admin/users/:id', requireAdmin, async (req: AuthRequest, res) =>
 router.post('/admin/maintenance/clear-test-users', requireAdmin, async (_req: AuthRequest, res) => {
   const database = getDatabaseClient();
   const forumDb = getForumDatabaseClient();
-  const adminUser = await database.queryOne<{ id: number }>("SELECT id FROM users WHERE username = 'admin'");
+  const membershipDb = getMembershipDatabaseClient();
+  const adminUser = await database.queryOne<{ id: number }>("SELECT id FROM users WHERE role = 'admin' ORDER BY id LIMIT 1");
   const userAssets = await database.queryMany<{ avatar_url: string | null }>(
-    "SELECT avatar_url FROM users WHERE username <> 'admin' AND avatar_url IS NOT NULL"
+    "SELECT avatar_url FROM users WHERE role <> 'admin' AND avatar_url IS NOT NULL"
   );
 
   if (!adminUser) {
-    return res.status(400).json({ error: '未找到用户名为 admin 的管理员账号，无法执行清理' });
+    return res.status(400).json({ error: '未找到任何管理员账号(role=admin),无法执行清理' });
   }
 
+  const adminId = adminUser.id;
+
   await database.transaction(async (tx) => {
-    await tx.execute("DELETE FROM favorites WHERE user_id IN (SELECT id FROM users WHERE username <> 'admin')");
-    await tx.execute("DELETE FROM comments WHERE user_id IN (SELECT id FROM users WHERE username <> 'admin')");
-    await tx.execute("DELETE FROM downloads WHERE user_id IN (SELECT id FROM users WHERE username <> 'admin')");
-    await tx.execute("DELETE FROM play_events WHERE user_id IN (SELECT id FROM users WHERE username <> 'admin')");
-    await tx.execute("DELETE FROM preview_history WHERE user_id IN (SELECT id FROM users WHERE username <> 'admin')");
-    await tx.execute("DELETE FROM feedback WHERE user_id IN (SELECT id FROM users WHERE username <> 'admin')");
-    await tx.execute("DELETE FROM orders WHERE user_id IN (SELECT id FROM users WHERE username <> 'admin')");
-    await tx.execute("DELETE FROM beat_license_agreements WHERE user_id IN (SELECT id FROM users WHERE username <> 'admin')");
-    await tx.execute("UPDATE beats SET uploaded_by = NULL WHERE uploaded_by IN (SELECT id FROM users WHERE username <> 'admin')");
-    await tx.execute("DELETE FROM users WHERE username <> 'admin'");
+    await tx.execute("DELETE FROM favorites WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
+    await tx.execute("DELETE FROM comments WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
+    await tx.execute("DELETE FROM downloads WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
+    await tx.execute("DELETE FROM play_events WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
+    await tx.execute("DELETE FROM preview_history WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
+    await tx.execute("DELETE FROM feedback WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
+    await tx.execute("DELETE FROM orders WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
+    await tx.execute("DELETE FROM beat_license_agreements WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
+    await tx.execute("UPDATE beats SET uploaded_by = NULL WHERE uploaded_by IN (SELECT id FROM users WHERE role <> 'admin')");
+    await tx.execute("DELETE FROM users WHERE role <> 'admin'");
   });
 
-  // 清理论坛库孤儿数据
-  await forumDb.execute("DELETE FROM forum_posts WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
-  await forumDb.execute("DELETE FROM forum_comments WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
-  await forumDb.execute("DELETE FROM forum_likes WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
-  await forumDb.execute("DELETE FROM forum_favorites WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
-  await forumDb.execute("DELETE FROM forum_sign_ins WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
-  await forumDb.execute("DELETE FROM forum_user_points WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
-  await forumDb.execute("DELETE FROM forum_point_transactions WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
-  await forumDb.execute("DELETE FROM forum_lottery_records WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
-  await forumDb.execute("DELETE FROM forum_point_download_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
-  await forumDb.execute("DELETE FROM forum_comment_likes WHERE user_id NOT IN (SELECT id FROM users WHERE username = 'admin')");
+  // 清理论坛库 + 会员库孤儿数据
+  await forumDb.execute("DELETE FROM forum_posts WHERE user_id <> ?", [adminId]);
+  await forumDb.execute("DELETE FROM forum_comments WHERE user_id <> ?", [adminId]);
+  await forumDb.execute("DELETE FROM forum_likes WHERE user_id <> ?", [adminId]);
+  await forumDb.execute("DELETE FROM forum_favorites WHERE user_id <> ?", [adminId]);
+  await forumDb.execute("DELETE FROM forum_sign_ins WHERE user_id <> ?", [adminId]);
+  await membershipDb.execute("DELETE FROM user_points WHERE user_id <> ?", [adminId]);
+  await membershipDb.execute("DELETE FROM point_transactions WHERE user_id <> ?", [adminId]);
+  await forumDb.execute("DELETE FROM forum_lottery_records WHERE user_id <> ?", [adminId]);
+  await membershipDb.execute("DELETE FROM point_download_permissions WHERE user_id <> ?", [adminId]);
+  await forumDb.execute("DELETE FROM forum_comment_likes WHERE user_id <> ?", [adminId]);
+  // VIP 数据(也按 role<>admin 过滤)
+  await membershipDb.execute("DELETE FROM vip_orders WHERE user_id <> ?", [adminId]);
+  await membershipDb.execute("DELETE FROM vip_users WHERE user_id <> ?", [adminId]);
 
   for (const userAsset of userAssets) {
     await deleteStoredAsset('avatar', userAsset.avatar_url);

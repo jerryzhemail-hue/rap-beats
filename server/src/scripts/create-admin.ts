@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
-import { initDatabase, getDatabaseClient, getForumDatabaseClient, initMySqlDatabaseClientFromEnv } from '../database/index.js';
+import { initDatabase, getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient, initMySqlDatabaseClientFromEnv } from '../database/index.js';
 
 function readArg(flag: string): string | undefined {
   const idx = process.argv.indexOf(flag);
@@ -26,7 +26,7 @@ const requiredPassword = password;
 
 async function main() {
   initMySqlDatabaseClientFromEnv();
-  await initDatabase(getDatabaseClient(), getForumDatabaseClient());
+  await initDatabase(getDatabaseClient(), getForumDatabaseClient(), getMembershipDatabaseClient());
   const database = getDatabaseClient();
 
   const [byUsername, byEmail] = await Promise.all([

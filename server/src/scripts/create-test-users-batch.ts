@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
-import { initDatabase, getDatabaseClient, getForumDatabaseClient, initMySqlDatabaseClientFromEnv } from '../database/index.js';
+import { initDatabase, getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient, initMySqlDatabaseClientFromEnv } from '../database/index.js';
 
 // ⛔ 保护:此脚本只允许在本地开发环境运行,严禁在生产数据库跑
 if (process.env.NODE_ENV === 'production') {
@@ -23,7 +23,7 @@ const BASE_EMAIL_DOMAIN = 'test.local';
 
 async function main() {
   initMySqlDatabaseClientFromEnv();
-  await initDatabase(getDatabaseClient(), getForumDatabaseClient());
+  await initDatabase(getDatabaseClient(), getForumDatabaseClient(), getMembershipDatabaseClient());
   const db = getDatabaseClient();
 
   const accounts: Array<{ username: string; email: string; password: string; role: string; vip_level: string }> = [];

@@ -71,3 +71,6 @@ backups/
 # AI 工具本地配置(不入仓)
 .codex/
 .cursor/
+
+# Server misc backup/scratch (not for version control)
+server/.backup/

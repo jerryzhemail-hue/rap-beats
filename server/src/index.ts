@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
-import { initDatabase, getDatabaseClient, getForumDatabaseClient, initMySqlDatabaseClientFromEnv } from './database/index.js';
+import { initDatabase, getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient, initMySqlDatabaseClientFromEnv } from './database/index.js';
 import { initStorage } from './services/storage.js';
 import beatsRouter from './routes/beats.js';
 import rappersRouter from './routes/rappers.js';
@@ -83,7 +83,7 @@ app.get('/api/health', async (_req, res) => {
 
 async function startServer() {
   initMySqlDatabaseClientFromEnv();
-  await initDatabase(getDatabaseClient(), getForumDatabaseClient());
+  await initDatabase(getDatabaseClient(), getForumDatabaseClient(), getMembershipDatabaseClient());
 
   app.use('/api', beatsRouter);
   app.use('/api/rappers', rappersRouter);

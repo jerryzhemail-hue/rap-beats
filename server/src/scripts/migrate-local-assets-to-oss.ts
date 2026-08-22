@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { initDatabase, getDatabaseClient, getForumDatabaseClient, initMySqlDatabaseClientFromEnv } from '../database/index.js';
+import { initDatabase, getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient, initMySqlDatabaseClientFromEnv } from '../database/index.js';
 import { isRemoteStorageEnabled, resolveLocalAssetPath, saveBuffer, type StorageKind } from '../services/storage.js';
 
 type BeatAssetRow = {
@@ -99,7 +99,7 @@ async function main() {
   }
 
   initMySqlDatabaseClientFromEnv();
-  await initDatabase(getDatabaseClient(), getForumDatabaseClient());
+  await initDatabase(getDatabaseClient(), getForumDatabaseClient(), getMembershipDatabaseClient());
 
   const deleteLocalAfterSuccess = hasFlag('--delete-local');
   const limit = Number(readArg('--limit') || '0');

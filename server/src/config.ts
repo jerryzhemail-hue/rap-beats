@@ -34,6 +34,17 @@ export interface ForumDbConfig {
   sharesMainPool: boolean;
 }
 
+export interface MembershipDbConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  connectionLimit: number;
+  /** 是否共用主库(没有设置 MEMBERSHIP_DB_NAME 时) */
+  sharesMainPool: boolean;
+}
+
 export interface OssConfig {
   region: string;
   bucket: string;
@@ -72,6 +83,7 @@ export interface AppConfig {
   db: {
     main: MainDbConfig;
     forum: ForumDbConfig;
+    membership: MembershipDbConfig;
   };
   auth: {
     jwtSecret: string;
@@ -134,10 +146,10 @@ function isProductionLike(env: AppConfig['env']): boolean {
 function isProductionForbiddenDb(name: string, env: AppConfig['env']): boolean {
   if (!isProductionLike(env)) return false;
   // 假设生产库名是 rap_beats / rap_beats_forum,本地是 <underscore>dev 后缀
-  return name === 'rap_beats' || name === 'rap_beats_forum';
+  return name === 'rap_beats' || name === 'rap_beats_forum' || name === 'rap_beats_membership';
 }
 
-// ─── 主配置加载 ──────────────────────────────────────────────────────────────
+// 主配置加载 ──────────────────────────────────────────────────────────────
 
 let cached: AppConfig | null = null;
 
@@ -146,6 +158,8 @@ export function loadConfig(): AppConfig {
 
   const env = detectEnv();
   const isProduction = isProductionLike(env);
+  const rawSharesMainPool = readEnvBool('FORUM_DB_SHARES_MAIN_POOL', false);
+  const rawMembershipSharesMainPool = readEnvBool('MEMBERSHIP_DB_SHARES_MAIN_POOL', false);
 
   // ── Storage
   const driverRaw = (readEnv('STORAGE_DRIVER') || 'local').toLowerCase();
@@ -184,6 +198,7 @@ export function loadConfig(): AppConfig {
   // ── DB
   const mainDbName = readEnv('DB_NAME') || '';
   const forumDbName = readEnv('FORUM_DB_NAME') || '';
+  const membershipDbName = readEnv('MEMBERSHIP_DB_NAME') || '';
 
   if (!mainDbName) {
     throw new Error('Missing required env DB_NAME');
@@ -221,9 +236,37 @@ export function loadConfig(): AppConfig {
       password: readEnv('FORUM_DB_PASSWORD') || main.password,
       database: forumDbName,
       connectionLimit: readEnvInt('DB_POOL_SIZE', 10),
-      sharesMainPool: false,
+      sharesMainPool: rawSharesMainPool,
     };
   }
+
+  // sharesMainPool 是业务层 flag,不能进 mysql2 pool options
+  // (mysql2 会 warning 未知选项,后续版本会抛错)
+  forum.sharesMainPool = forumDbName ? rawSharesMainPool : true;
+
+  // Membership DB:积分 + VIP(独立库,默认跟主库共享)
+  let membership: MembershipDbConfig;
+  if (!membershipDbName) {
+    membership = {
+      ...main,
+      database: mainDbName,
+      sharesMainPool: true,
+    };
+  } else {
+    if (isProductionForbiddenDb(membershipDbName, env)) {
+      console.warn(`[config] WARNING: NODE_ENV=${env} 但 MEMBERSHIP_DB_NAME=${membershipDbName}`);
+    }
+    membership = {
+      host: readEnv('MEMBERSHIP_DB_HOST') || main.host,
+      port: readEnvInt('MEMBERSHIP_DB_PORT', main.port),
+      user: readEnv('MEMBERSHIP_DB_USER') || main.user,
+      password: readEnv('MEMBERSHIP_DB_PASSWORD') || main.password,
+      database: membershipDbName,
+      connectionLimit: readEnvInt('DB_POOL_SIZE', 10),
+      sharesMainPool: rawMembershipSharesMainPool,
+    };
+  }
+  membership.sharesMainPool = membershipDbName ? rawMembershipSharesMainPool : true;
 
   if (!main.user) {
     throw new Error('Missing required env DB_USER');
@@ -267,7 +310,7 @@ export function loadConfig(): AppConfig {
     isProduction,
     storage,
     oss,
-    db: { main, forum },
+    db: { main, forum, membership },
     auth,
     urls,
     xunhu,

@@ -129,6 +129,16 @@ async function main() {
     charset: 'utf8mb4',
   });
 
+  // 连接会员库（积分 + VIP）
+  const membershipConn = await mysql.createConnection({
+    host: process.env.MEMBERSHIP_DB_HOST || process.env.DB_HOST || '127.0.0.1',
+    port: Number(process.env.MEMBERSHIP_DB_PORT || process.env.DB_PORT || '3307'),
+    user: process.env.MEMBERSHIP_DB_USER || process.env.DB_USER || 'root',
+    password: process.env.MEMBERSHIP_DB_PASSWORD || process.env.DB_PASSWORD || 'dev_root_2024',
+    database: process.env.MEMBERSHIP_DB_NAME || 'rap_beats_membership_dev',
+    charset: 'utf8mb4',
+  });
+
   // 确保 admin 管理员存在
   const adminHash = bcrypt.hashSync('Admin@123456', 10);
   await conn.execute(
@@ -185,13 +195,13 @@ async function main() {
   console.log(`  ✓ 已为 ${TEST_USERS.length} 个用户创建论坛资料`);
 
   // ========================================
-  // 3. 初始化论坛积分
+  // 3. 初始化论坛积分（写到 membership 库）
   // ========================================
   console.log('\n💰 步骤 3/5: 初始化论坛积分...');
   for (const user of TEST_USERS) {
     const uid = userIds[user.username];
-    await forumConn.execute(
-      `INSERT INTO forum_user_points (user_id, total_points)
+    await membershipConn.execute(
+      `INSERT INTO user_points (user_id, total_points)
        VALUES (?, ?)
        ON DUPLICATE KEY UPDATE total_points = VALUES(total_points)`,
       [uid, user.points]
@@ -365,6 +375,7 @@ async function main() {
 
   await conn.end();
   await forumConn.end();
+  await membershipConn.end();
 
   // ========================================
   // 输出汇总

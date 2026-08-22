@@ -31,13 +31,61 @@ export function formatTime(dateStr: string | Date | null | undefined): string {
 }
 
 /**
- * 完整日期格式化:YYYY-MM-DD HH:mm(本地时区)
- * 用于列表/详情页"完整时间"展示
+ * 消息中心风格的相对时间:
+ *   当天:HH:mm
+ *   昨天:「昨天」
+ *   < 7 天:X 天前
+ *   更早:M月D日
  */
-export function formatDate(dateStr: string | Date | null | undefined): string {
+export function formatChatTime(dateStr: string | Date | null | undefined): string {
   if (!dateStr) return '';
   const d = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
   if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const diff = now.getTime() - d.getTime();
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  if (days === 0) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days}天前`;
+  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+}
+
+/**
+ * 完整本地化时间:YYYY-MM-DD HH:mm:ss(可指定时区)
+ * 用于 admin 后台等需要精确到秒、可读性强的场景
+ */
+export function formatDateTime(
+  dateStr: string | Date | null | undefined,
+  timeZone?: string,
+  emptyFallback = ''
+): string {
+  if (!dateStr) return emptyFallback;
+  const d = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
+  if (isNaN(d.getTime())) return emptyFallback;
+  return d.toLocaleString('zh-CN', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+}
+
+/**
+ * 完整日期格式化:YYYY-MM-DD HH:mm(本地时区)
+ * 用于列表/详情页"完整时间"展示
+ * @param emptyFallback 空值时的回退字符串(默认 '' 与 ProfileView 一致;
+ *   旧的 admin 页面期望 '-' 作为占位,可传 '-' 保留原行为)
+ */
+export function formatDate(
+  dateStr: string | Date | null | undefined,
+  emptyFallback = ''
+): string {
+  if (!dateStr) return emptyFallback;
+  const d = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
+  if (isNaN(d.getTime())) return emptyFallback;
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
@@ -48,11 +96,15 @@ export function formatDate(dateStr: string | Date | null | undefined): string {
 
 /**
  * 日期(无时间):YYYY-MM-DD
+ * @param emptyFallback 空值时的回退字符串(默认 '')
  */
-export function formatDateOnly(dateStr: string | Date | null | undefined): string {
-  if (!dateStr) return '';
+export function formatDateOnly(
+  dateStr: string | Date | null | undefined,
+  emptyFallback = ''
+): string {
+  if (!dateStr) return emptyFallback;
   const d = typeof dateStr === 'string' ? new Date(dateStr) : dateStr;
-  if (isNaN(d.getTime())) return '';
+  if (isNaN(d.getTime())) return emptyFallback;
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');

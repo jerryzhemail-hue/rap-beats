@@ -16,7 +16,7 @@
  *   - 所有操作仅影响历史数据，新增数据由写入侧的 sanitize.ts 保护
  */
 import 'dotenv/config';
-import { initDatabase, getDatabaseClient, getForumDatabaseClient, initMySqlDatabaseClientFromEnv } from '../database/index.js';
+import { initDatabase, getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient, initMySqlDatabaseClientFromEnv } from '../database/index.js';
 import { sanitizeHtml, escapeHtmlContent } from '../utils/sanitize.js';
 
 async function main() {
@@ -24,7 +24,7 @@ async function main() {
   console.log('='.repeat(50));
 
   initMySqlDatabaseClientFromEnv();
-  await initDatabase(getDatabaseClient(), getForumDatabaseClient());
+  await initDatabase(getDatabaseClient(), getForumDatabaseClient(), getMembershipDatabaseClient());
 
   const forumDb = getForumDatabaseClient();
 

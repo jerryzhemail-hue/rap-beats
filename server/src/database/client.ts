@@ -21,8 +21,10 @@ export interface DatabaseClient {
 
 let mainDatabaseClient: DatabaseClient | null = null;
 let forumDatabaseClient: DatabaseClient | null = null;
+let membershipDatabaseClient: DatabaseClient | null = null;
 let mainMysqlPool: mysql.Pool | null = null;
 let forumMysqlPool: mysql.Pool | null = null;
+let membershipMysqlPool: mysql.Pool | null = null;
 
 export function getDbDriver(): 'mysql' {
   const raw = (process.env.DB_DRIVER || 'mysql').toLowerCase();
@@ -112,6 +114,15 @@ export function getForumDatabaseClient(): DatabaseClient {
   return forumDatabaseClient;
 }
 
+export function getMembershipDatabaseClient(): DatabaseClient {
+  if (!membershipDatabaseClient) {
+    if (!membershipMysqlPool) initMembershipMySqlDatabaseClientFromEnv();
+    if (!membershipMysqlPool) throw new Error('MySQL membership client not initialized');
+    membershipDatabaseClient = new MySqlDatabaseClient(membershipMysqlPool);
+  }
+  return membershipDatabaseClient;
+}
+
 function createPool(config: {
   host: string;
   port: number;
@@ -120,13 +131,19 @@ function createPool(config: {
   database: string;
   connectionLimit: number;
 }): mysql.Pool {
+  // 只传 mysql2 认识的连接选项;sharesMainPool 等业务 flag 已剥离
   return mysql.createPool({
-    ...config,
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database,
+    connectionLimit: config.connectionLimit,
     waitForConnections: true,
     queueLimit: 0,
     idleTimeout: 60 * 1000,
     maxIdle: 10,
-    multipleStatements: false
+    multipleStatements: false,
   });
 }
 
@@ -151,4 +168,21 @@ function initForumMySqlDatabaseClientFromEnv() {
 
   forumMysqlPool = createPool(forum);
   forumDatabaseClient = null;
+}
+
+function initMembershipMySqlDatabaseClientFromEnv() {
+  const { main, membership } = config().db;
+
+  if (membership.sharesMainPool) {
+    membershipMysqlPool = mainMysqlPool;
+    membershipDatabaseClient = null;
+    return;
+  }
+
+  if (!membership.user) {
+    throw new Error('Membership MySQL config missing: MEMBERSHIP_DB_USER is required when MEMBERSHIP_DB_NAME is set');
+  }
+
+  membershipMysqlPool = createPool(membership);
+  membershipDatabaseClient = null;
 }
