@@ -17,6 +17,7 @@ export type PointReason =
   | 'task_reward'       // 任务奖励
   | 'admin_adjust'      // 管理员调整
   | 'exchange'          // 积分兑换消费
+  | 'exchange_download' // 积分兑换下载权限
   | 'deduction';        // 积分扣除
 
 interface PointChangeOptions {
@@ -139,6 +140,7 @@ export const pointReasonLabels: Record<PointReason, string> = {
   task_reward: '任务奖励',
   admin_adjust: '管理员调整',
   exchange: '积分兑换',
+  exchange_download: '积分兑换下载权限',
   deduction: '积分扣除',
 };
 
