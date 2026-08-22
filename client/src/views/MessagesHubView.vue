@@ -15,6 +15,7 @@ import {
   blockUser,
   unblockUser,
   searchUsers,
+  ensureConversation,
   type ForumConversation,
   type ForumMessage,
 } from '@/api/forum'
@@ -438,12 +439,23 @@ const newChatDisplayList = computed(() => {
   return newChatSearchResults.value
 })
 
-function startChatWith(userId: number) {
+async function startChatWith(userId: number) {
   if (!authStore.user) return
   const a = Math.min(authStore.user.id, userId)
   const b = Math.max(authStore.user.id, userId)
+  const conversationId = `${a}_${b}`
   closeNewChat()
-  router.push(`/forum/messages/${encodeURIComponent(`${a}_${b}`)}`)
+  try {
+    const conv = await ensureConversation(userId)
+    // 如果本地会话列表里还没有，插入一条（方便左侧列表显示）
+    if (!conversations.value.some((c) => c.id === conv.id)) {
+      conversations.value.unshift(conv)
+    }
+  } catch (err: any) {
+    alert(err?.message || '无法发起私信')
+    return
+  }
+  router.push(`/forum/messages/${encodeURIComponent(conversationId)}`)
 }
 
 // ─── 实时消息（SSE 推送） ─────────────────────────────────────────────

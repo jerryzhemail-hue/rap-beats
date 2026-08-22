@@ -10,6 +10,7 @@ import {
   fetchForumUserPosts,
   fetchUserFollowers,
   fetchUserFollowings,
+  ensureConversation,
   type ForumUser,
   type ForumPost,
 } from '@/api/forum'
@@ -120,11 +121,15 @@ async function startChat() {
     alert('不能给自己发私信')
     return
   }
-  // 计算会话 ID（与后端保持一致：两个用户 ID 中小的在前）
+  try {
+    await ensureConversation(userId.value)
+  } catch (err: any) {
+    alert(err?.message || '无法发起私信')
+    return
+  }
   const a = Math.min(userId.value, authStore.user!.id)
   const b = Math.max(userId.value, authStore.user!.id)
   const conversationId = encodeURIComponent(`${a}_${b}`)
-  // 直接跳转聊天页，不发送"你好"占位消息
   router.push(`/forum/messages/${conversationId}`)
 }
 
@@ -341,6 +346,13 @@ watch(userId, () => {
   min-height: 100vh;
   background: var(--bg-primary, #0f0f14);
   color: var(--text-primary, #e8e8ed);
+  padding: 0 16px;
+}
+
+.user-page > * {
+  max-width: 75%;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .page-header {

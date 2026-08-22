@@ -13,10 +13,12 @@ import {
   doSignIn,
   toggleForumLike,
   toggleForumFavorite,
+  fetchFriends,
   type ForumCategory,
   type ForumTopic,
   type ForumPost,
 } from '@/api/forum'
+import { searchUsers } from '@/api/forum'
 import UserActions from '@/components/UserActions.vue'
 
 const router = useRouter()
@@ -39,6 +41,75 @@ const signInStatus = ref({ signed_today: false, consecutive_days: 0, total_point
 const signingIn = ref(false)
 const signInMsg = ref('')
 
+// ─── 搜索 ──────────────────────────────────────────────────────────────────
+const searchQuery = ref('')
+const searchResults = ref<Array<{ id: number; username: string; avatar_url: string | null }>>([])
+const searchLoading = ref(false)
+const searchVisible = ref(false)
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+async function handleSearchInput() {
+  if (searchTimer) clearTimeout(searchTimer)
+  const q = searchQuery.value.trim()
+  if (!q) {
+    searchResults.value = []
+    searchVisible.value = false
+    return
+  }
+  if (!authStore.isAuthenticated) {
+    searchResults.value = []
+    return
+  }
+  searchTimer = setTimeout(async () => {
+    searchLoading.value = true
+    searchVisible.value = true
+    try {
+      const data = await searchUsers(q, 10)
+      searchResults.value = data.users
+    } catch {
+      searchResults.value = []
+    } finally {
+      searchLoading.value = false
+    }
+  }, 300)
+}
+
+function goToSearchUser(userId: number) {
+  searchVisible.value = false
+  searchQuery.value = ''
+  searchResults.value = []
+  router.push(`/forum/user/${userId}`)
+}
+
+function handleSearchBlur() {
+  setTimeout(() => { searchVisible.value = false }, 200)
+}
+
+// ─── 好友列表 ───────────────────────────────────────────────────────────────
+const friends = ref<Array<{ id: number; username: string; avatar_url: string | null }>>([])
+const friendsLoading = ref(false)
+
+async function loadFriends() {
+  if (!authStore.isAuthenticated) return
+  friendsLoading.value = true
+  try {
+    const data = await fetchFriends({ page_size: 20 })
+    friends.value = data.friends.filter((f: any) => f.id)
+  } catch {
+    friends.value = []
+  } finally {
+    friendsLoading.value = false
+  }
+}
+
+async function startConversation(userId: number, username: string) {
+  if (!authStore.isAuthenticated) { authPromptRef.value?.requireAuth(); return }
+  const { ensureConversation } = await import('@/api/forum')
+  const conv = await ensureConversation(userId)
+  void username
+  router.push(`/forum/messages/${conv.id}`)
+}
+
 // ─── Computed ───────────────────────────────────────────────────────────────
 const hasMore = computed(() => posts.value.length < total.value)
 
@@ -58,6 +129,7 @@ async function loadInit() {
     total.value = postsData.total
     currentPage.value = 1
     if (signData) signInStatus.value = signData
+    if (authStore.isAuthenticated) loadFriends()
   } catch (err) {
     console.error(err)
   } finally {
@@ -321,6 +393,7 @@ function nextImage() {
               :user-id="post.user_id"
               :username="post.author_username"
               compact
+              mode="follow-only"
               class="post-card-actions"
               @click.stop
             />
@@ -430,6 +503,42 @@ function nextImage() {
 
     <!-- 右侧栏 -->
     <aside class="forum-sidebar-right">
+      <!-- 搜索区域 -->
+      <div class="right-card search-area">
+        <div class="search-wrapper">
+          <input
+            v-model="searchQuery"
+            class="forum-search-input"
+            placeholder="搜索用户..."
+            @input="handleSearchInput"
+            @focus="searchVisible = !!searchQuery"
+            @blur="handleSearchBlur"
+          />
+          <button class="search-btn" @click="handleSearchInput">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </button>
+          <div v-if="searchVisible" class="search-dropdown">
+            <div v-if="searchLoading" class="search-loading">搜索中...</div>
+            <div v-else-if="searchResults.length === 0" class="search-empty">未找到用户</div>
+            <button
+              v-for="user in searchResults"
+              :key="user.id"
+              class="search-user-item"
+              @mousedown.prevent="goToSearchUser(user.id)"
+            >
+              <div class="search-user-avatar">
+                <img v-if="user.avatar_url" :src="user.avatar_url" :alt="user.username" />
+                <span v-else>{{ getAvatarLetter(user.username) }}</span>
+              </div>
+              <span class="search-user-name">{{ user.username }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- 登录提示卡 -->
       <div class="right-card">
         <template v-if="!authStore.isAuthenticated">
@@ -499,6 +608,44 @@ function nextImage() {
           </RouterLink>
         </div>
       </div>
+
+      <!-- 好友列表 -->
+      <div v-if="authStore.isAuthenticated" class="right-card friends-card">
+        <div class="right-card-title">好友</div>
+        <div v-if="friendsLoading" class="friends-loading">加载中...</div>
+        <div v-else-if="friends.length === 0" class="friends-empty">暂无互相关注的好友</div>
+        <div v-else class="friends-list">
+          <div
+            v-for="friend in friends"
+            :key="friend.id"
+            class="friend-item"
+          >
+            <button
+              class="friend-avatar-btn"
+              :title="`查看 ${friend.username} 的主页`"
+              @click="router.push(`/forum/user/${friend.id}`)"
+            >
+              <img v-if="friend.avatar_url" :src="friend.avatar_url" :alt="friend.username" />
+              <span v-else>{{ getAvatarLetter(friend.username) }}</span>
+            </button>
+            <button
+              class="friend-name-btn"
+              :title="friend.username"
+              @click="router.push(`/forum/user/${friend.id}`)"
+            >{{ friend.username }}</button>
+            <button
+              class="friend-msg-btn"
+              title="发私信"
+              @click="startConversation(friend.id, friend.username)"
+            >✉</button>
+          </div>
+        </div>
+        <button
+          v-if="friends.length > 0"
+          class="view-more-btn"
+          @click="router.push('/friends')"
+        >查看全部 →</button>
+      </div>
     </aside>
   </div>
 </template>
@@ -518,7 +665,6 @@ function nextImage() {
 /* 左侧栏 */
 .forum-sidebar-left {
   position: sticky;
-  top: 80px;
   height: fit-content;
 }
 .sidebar-section {
@@ -570,11 +716,12 @@ function nextImage() {
 .feed-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 16px;
   background: var(--bg-card);
   border-radius: var(--radius);
   padding: 8px 16px;
+  justify-content: space-between;
 }
 .feed-tabs { display: flex; gap: 4px; }
 .feed-tab {
@@ -603,8 +750,158 @@ function nextImage() {
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
+  flex-shrink: 0;
 }
 .new-post-btn:hover { background: var(--accent-hover); }
+
+/* 搜索 */
+.search-wrapper {
+  flex: 1;
+  position: relative;
+}
+.forum-search-input {
+  width: 100%;
+  padding: 7px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.forum-search-input:focus { border-color: var(--accent); }
+.forum-search-input::placeholder { color: var(--text-secondary); }
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  z-index: 100;
+  overflow: hidden;
+}
+.search-loading, .search-empty {
+  padding: 14px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.search-user-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+.search-user-item:hover { background: var(--bg-secondary); }
+.search-user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 700;
+}
+.search-user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.search-user-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 好友列表 */
+.friends-card { margin-top: 0; }
+.friends-loading, .friends-empty {
+  padding: 10px 0;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.friends-list { display: flex; flex-direction: column; gap: 4px; }
+.friend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.friend-avatar-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 700;
+  transition: opacity 0.15s;
+}
+.friend-avatar-btn:hover { opacity: 0.8; }
+.friend-avatar-btn img { width: 100%; height: 100%; object-fit: cover; }
+.friend-name-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  padding: 0;
+  transition: color 0.15s;
+}
+.friend-name-btn:hover { color: var(--accent); }
+.friend-msg-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 4px;
+  transition: color 0.15s;
+}
+.friend-msg-btn:hover { color: var(--accent); }
+.view-more-btn {
+  margin-top: 10px;
+  width: 100%;
+  padding: 7px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  text-align: center;
+}
+.view-more-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* 加载骨架屏 */
 .forum-loading { display: flex; flex-direction: column; gap: 12px; }
@@ -951,10 +1248,52 @@ function nextImage() {
 .loading-more { color: var(--text-secondary); font-size: 13px; }
 .no-more { color: var(--text-secondary); font-size: 12px; }
 
+/* 右侧栏搜索区域 */
+.search-area {
+  background: linear-gradient(135deg, var(--bg-card), rgba(124, 58, 237, 0.05));
+  border: 1px solid var(--border);
+}
+
+.right-card.search-area {
+  padding: 14px;
+}
+
+.search-area .search-wrapper {
+  flex: none;
+  position: relative;
+  display: flex;
+}
+
+.search-area .forum-search-input {
+  padding-right: 36px;
+  width: 100%;
+}
+
+.search-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.search-btn:hover {
+  background: var(--accent-hover);
+}
+
 /* 右侧栏 */
 .forum-sidebar-right {
   position: sticky;
-  top: 80px;
   height: fit-content;
   display: flex;
   flex-direction: column;

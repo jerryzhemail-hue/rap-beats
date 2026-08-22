@@ -558,6 +558,15 @@ export async function fetchMessageConversations() {
   return request<{ conversations: ForumConversation[] }>('/api/forum/messages/conversations');
 }
 
+// 确保会话存在（不发送消息，用于从外部跳转私信）
+export async function ensureConversation(receiverId: number) {
+  return request<ForumConversation>('/api/forum/messages/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ receiver_id: receiverId }),
+  });
+}
+
 // 获取某个会话的消息
 export async function fetchConversationMessages(conversationId: string, params: { page?: number; page_size?: number } = {}) {
   const query = new URLSearchParams();
@@ -681,6 +690,17 @@ export async function fetchUserFollowings(userId: number, params: { page?: numbe
     followings: Array<{ id: number; username: string; avatar_url: string | null; followed_at: string }>;
     pagination: { page: number; page_size: number; total: number; total_pages: number };
   }>(`/api/forum/users/${userId}/followings?${query.toString()}`);
+}
+
+// 获取互相关注的好友列表
+export async function fetchFriends(params: { page?: number; page_size?: number } = {}) {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.page_size) query.set('page_size', String(params.page_size));
+  return request<{
+    friends: Array<{ id: number; username: string; avatar_url: string | null; followed_at: string }>;
+    pagination: { page: number; page_size: number; total: number; total_pages: number };
+  }>(`/api/forum/friends?${query.toString()}`);
 }
 
 // 删除会话

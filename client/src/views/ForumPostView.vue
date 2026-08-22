@@ -246,6 +246,7 @@ function getAvatarLetter(username: string) {
           <UserActions
             :user-id="post.user_id"
             :username="post.author_username"
+            mode="follow-only"
           />
         </div>
         <div class="post-stats">
@@ -394,6 +395,7 @@ function getAvatarLetter(username: string) {
                 :user-id="comment.user_id"
                 :username="comment.author_username"
                 compact
+                mode="follow-only"
                 class="comment-user-actions"
               />
               <button
@@ -459,6 +461,7 @@ function getAvatarLetter(username: string) {
                       :user-id="reply.user_id"
                       :username="reply.author_username"
                       compact
+                      mode="follow-only"
                       class="comment-user-actions"
                     />
                     <button

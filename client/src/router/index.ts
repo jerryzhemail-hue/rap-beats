@@ -97,6 +97,12 @@ const router = createRouter({
       meta: { public: true }
     },
     {
+      path: '/forum/blocked',
+      name: 'ForumBlocked',
+      component: () => import('../views/BlockedUsersView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/forum/messages/:conversationId',
       name: 'ForumChat',
       component: () => import('../views/MessagesHubView.vue'),

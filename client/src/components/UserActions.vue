@@ -6,12 +6,18 @@ import {
   fetchFollowStatus,
   followUser,
   unfollowUser,
+  ensureConversation,
+  fetchBlockStatus,
+  blockUser,
+  unblockUser,
 } from '@/api/forum'
 
 const props = withDefaults(
   defineProps<{
     userId: number | null | undefined
     username?: string | null
+    /** 模式：full=关注+私信+拉黑，follow-only=仅关注 */
+    mode?: 'full' | 'follow-only'
     /** 紧凑样式（用于帖子卡/评论区等空间有限处） */
     compact?: boolean
     /** 默认是否已经关注（由父组件传入可减少一次请求） */
@@ -19,6 +25,7 @@ const props = withDefaults(
   }>(),
   {
     username: null,
+    mode: 'full',
     compact: false,
     initialIsFollowing: false,
   }
@@ -34,9 +41,13 @@ const authStore = useAuthStore()
 const isFollowing = ref(props.initialIsFollowing)
 const loadingFollow = ref(false)
 const startingChat = ref(false)
+const blockedByMe = ref(false)
+const blockedMe = ref(false)
+const loadingBlock = ref(false)
 
 const isSelf = computed(() => authStore.user?.id === props.userId)
 const showActions = computed(() => !!props.userId && !isSelf.value)
+const showFull = computed(() => props.mode === 'full')
 
 function buildConversationId(otherId: number): string {
   const me = authStore.user!.id
@@ -50,8 +61,13 @@ async function refreshStatus() {
     return
   }
   try {
-    const data = await fetchFollowStatus(props.userId)
-    isFollowing.value = !!data.is_following
+    const [fs, bs] = await Promise.all([
+      fetchFollowStatus(props.userId),
+      fetchBlockStatus(props.userId).catch(() => ({ blocked_by_me: false, blocked_me: false })),
+    ])
+    isFollowing.value = !!fs.is_following
+    blockedByMe.value = !!bs.blocked_by_me
+    blockedMe.value = !!bs.blocked_me
     emit('update:following', isFollowing.value)
   } catch (err) {
     // 静默：接口失败不影响显示
@@ -83,19 +99,45 @@ async function handleFollow(e: Event) {
   }
 }
 
-function handleMessage(e: Event) {
+async function handleBlock(e: Event) {
   e.stopPropagation()
   e.preventDefault()
-  if (startingChat.value) return
-  if (!authStore.isAuthenticated) {
-    router.push('/login')
-    return
+  if (!authStore.isAuthenticated || !props.userId || isSelf.value || loadingBlock.value) return
+  if (blockedByMe.value) {
+    if (!confirm(`确认撤销对 ${props.username || '该用户'} 的拉黑？`)) return
+  } else {
+    if (!confirm(`确认拉黑 ${props.username || '该用户'}？拉黑后将无法收到对方的消息`)) return
   }
-  if (!props.userId || isSelf.value) return
+  loadingBlock.value = true
+  try {
+    if (blockedByMe.value) {
+      await unblockUser(props.userId)
+      blockedByMe.value = false
+    } else {
+      await blockUser(props.userId)
+      blockedByMe.value = true
+    }
+  } catch (err: any) {
+    alert(err?.message || '操作失败')
+  } finally {
+    loadingBlock.value = false
+  }
+}
+
+async function handleMessage(e: Event) {
+  e.stopPropagation()
+  e.preventDefault()
+  if (!authStore.isAuthenticated || !props.userId || isSelf.value || startingChat.value) return
   startingChat.value = true
   try {
+    const conv = await ensureConversation(props.userId)
     const conversationId = buildConversationId(props.userId)
+    // 如果当前在 MessagesHubView 中，可以通过 store 更新会话列表
+    // 这里直接跳转即可
+    void conv
     router.push(`/forum/messages/${conversationId}`)
+  } catch (err: any) {
+    alert(err?.message || '无法发起私信')
   } finally {
     startingChat.value = false
   }
@@ -128,15 +170,27 @@ onMounted(() => {
       <span class="icon" aria-hidden="true">{{ isFollowing ? '✓' : '+' }}</span>
       <span class="label">{{ isFollowing ? '已关注' : '关注' }}</span>
     </button>
-    <button
-      class="action-btn message-btn"
-      :disabled="startingChat"
-      :title="`私信 ${props.username || ''}`"
-      @click="handleMessage"
-    >
-      <span class="icon" aria-hidden="true">✉</span>
-      <span class="label">私信</span>
-    </button>
+    <template v-if="showFull">
+      <button
+        class="action-btn message-btn"
+        :disabled="startingChat"
+        :title="`私信 ${props.username || ''}`"
+        @click="handleMessage"
+      >
+        <span class="icon" aria-hidden="true">✉</span>
+        <span class="label">私信</span>
+      </button>
+      <button
+        class="action-btn block-btn"
+        :class="{ blocked: blockedByMe }"
+        :disabled="loadingBlock"
+        :title="blockedByMe ? '撤销拉黑' : `拉黑 ${props.username || ''}`"
+        @click="handleBlock"
+      >
+        <span class="icon" aria-hidden="true">{{ blockedByMe ? '✓' : '⛔' }}</span>
+        <span class="label">{{ blockedByMe ? '已拉黑' : '拉黑' }}</span>
+      </button>
+    </template>
   </div>
 </template>
 
@@ -212,5 +266,27 @@ onMounted(() => {
   border-color: var(--accent, #6366f1);
   color: var(--accent, #6366f1);
   background: rgba(99, 102, 241, 0.1);
+}
+
+.block-btn {
+  color: var(--text-secondary, #9ca3af);
+}
+
+.block-btn:hover:not(:disabled) {
+  border-color: #ef4444;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.block-btn.blocked {
+  border-color: #ef4444;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.block-btn.blocked:hover:not(:disabled) {
+  border-color: var(--text-secondary, #9ca3af);
+  color: var(--text-secondary, #9ca3af);
+  background: transparent;
 }
 </style>

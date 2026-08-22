@@ -52,6 +52,9 @@ function handleOutsideClick(e: Event) {
   if (!target.closest('.theme-toggle') && !target.closest('.theme-picker')) {
     showThemePicker.value = false
   }
+  if (!target.closest('.user-menu-wrap')) {
+    showUserMenu.value = false
+  }
 }
 
 function setTheme(themeId: string) {
@@ -91,6 +94,10 @@ const avatarSrc = computed(() => {
   if (authStore.user?.avatar_url) return resolveAvatarUrl(authStore.user.avatar_url)
   return ''
 })
+
+const showUserMenu = ref(false)
+function toggleUserMenu() { showUserMenu.value = !showUserMenu.value }
+function closeUserMenu() { showUserMenu.value = false }
 </script>
 
 <template>
@@ -135,16 +142,38 @@ const avatarSrc = computed(() => {
               {{ unreadMessageCount > 99 ? '99+' : unreadMessageCount }}
             </span>
           </RouterLink>
-          <router-link to="/profile" class="header-avatar" aria-label="进入个人中心">
-            <img v-if="avatarSrc" :src="avatarSrc" :alt="`${authStore.user?.username || '用户'}头像`" class="header-avatar-image" />
-            <span v-else>{{ avatarLetter }}</span>
-          </router-link>
-          <router-link to="/vip" class="username" aria-label="进入会员中心">
-            {{ authStore.user?.username }}
-            <span v-if="authStore.isVip" class="vip-tag" :style="{ background: vipBadgeConfig[authStore.vipLevel]?.color || '#f59e0b' }">{{ vipBadgeConfig[authStore.vipLevel]?.text || 'VIP' }}</span>
-          </router-link>
-          <router-link v-if="!authStore.isVip" to="/vip" class="vip-link-nav">开通VIP</router-link>
-          <button class="btn btn-outline logout-btn" @click="authStore.logout()">退出</button>
+          <div class="user-menu-wrap">
+            <button class="user-menu-trigger" @click.stop="toggleUserMenu" aria-label="用户菜单">
+              <router-link to="/profile" class="header-avatar" aria-label="进入个人中心">
+                <img v-if="avatarSrc" :src="avatarSrc" :alt="`${authStore.user?.username || '用户'}头像`" class="header-avatar-image" />
+                <span v-else>{{ avatarLetter }}</span>
+              </router-link>
+              <span class="username">
+                {{ authStore.user?.username }}
+                <span v-if="authStore.isVip" class="vip-tag" :style="{ background: vipBadgeConfig[authStore.vipLevel]?.color || '#f59e0b' }">{{ vipBadgeConfig[authStore.vipLevel]?.text || 'VIP' }}</span>
+              </span>
+            </button>
+            <transition name="dropdown">
+              <div v-if="showUserMenu" class="user-dropdown" @click.stop>
+                <router-link to="/profile" class="dropdown-item" @click="closeUserMenu">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                  个人主页
+                </router-link>
+                <router-link to="/forum/blocked" class="dropdown-item" @click="closeUserMenu">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>
+                  黑名单
+                </router-link>
+                <router-link v-if="!authStore.isVip" to="/vip" class="dropdown-item dropdown-vip" @click="closeUserMenu">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+                  开通VIP
+                </router-link>
+                <button class="dropdown-item dropdown-logout" @click="authStore.logout(); closeUserMenu()">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
+                  退出登录
+                </button>
+              </div>
+            </transition>
+          </div>
         </template>
         <template v-else>
           <RouterLink to="/login" class="btn btn-outline auth-btn-link">登录</RouterLink>
@@ -436,6 +465,90 @@ const avatarSrc = computed(() => {
 
 .theme-name {
   font-weight: 500;
+}
+
+/* ── User dropdown ────────────────────────────────────────────────────────── */
+.user-menu-wrap {
+  position: relative;
+}
+
+.user-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 8px;
+  transition: opacity 0.15s;
+}
+
+.user-menu-trigger:hover {
+  opacity: 0.85;
+}
+
+.user-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 180px;
+  background: var(--bg-secondary, #1a1a24);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 12px 36px rgba(0,0,0,0.4);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-primary, #e8e8ed);
+  text-decoration: none;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+}
+
+.dropdown-item:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.dropdown-vip {
+  color: #f59e0b;
+}
+
+.dropdown-logout {
+  color: #ef4444;
+}
+
+.dropdown-logout:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.dropdown-enter-active,
+.dropdown-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.dropdown-enter-from,
+.dropdown-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 @media (max-width: 640px) {
