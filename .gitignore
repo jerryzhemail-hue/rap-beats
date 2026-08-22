@@ -67,3 +67,7 @@ server/scripts/bpm_*.mjs
 # Local DB backups (not for version control — 任何 .sql / .dump / .tar.gz 都忽略)
 backups/
 !backups/.gitkeep
+
+# AI 工具本地配置(不入仓)
+.codex/
+.cursor/
