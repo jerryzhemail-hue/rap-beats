@@ -9,6 +9,7 @@ import { requireAuth, optionalAuth, AuthRequest } from '../middleware/auth.js';
 import { createDirectUploadTarget, saveBuffer, supportsDirectUpload } from '../services/storage.js';
 import { suggestTopics } from '../services/topicEngine.js';
 import { addClient, removeClient, pushToUser } from '../services/messageEvents.js';
+import type { ForumConversation, ForumMessage, ForumCategory, ForumTopic, ForumUser, ForumUserProfile } from '@shared/forum';
 
 // 从主库批量查询用户信息（用于跨库 enrichment）
 async function enrichWithUsers<T extends { user_id: number }>(
@@ -119,19 +120,60 @@ const messageLimiter = createRateLimiter({
   message: '发送消息过于频繁，请稍后再试',
 });
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Server 内部 DB row 类型(扩展 shared 类型,加 DB 列字段) ────────────────
 
-interface ForumCategory {
-  id: number;
-  name: string;
-  slug: string;
-  icon: string;
-  description: string;
-  sort_order: number;
+interface ForumCategoryRow extends ForumCategory {
   is_active: number;
-  post_count: number;
   real_post_count?: number;
 }
+
+interface ForumTopicRow extends ForumTopic {
+  category_id: number;
+}
+
+interface ForumUserRow extends ForumUser {
+  email?: string;
+  role?: string;
+  vip_level?: string;
+}
+
+interface ForumUserProfileRow {
+  user_id: number;
+  bio: string;
+  location: string;
+  website: string;
+  social_links: string;
+  post_count: number;
+  follower_count: number;
+  following_count: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface ForumConversationRow {
+  id: string;
+  participant_a: number;
+  participant_b: number;
+  last_message_content: string;
+  last_message_at: Date;
+  unread_count_a: number;
+  unread_count_b: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+interface ForumMessageRow {
+  id: number;
+  conversation_id: string;
+  sender_id: number;
+  receiver_id: number;
+  content: string;
+  message_type: 'text' | 'image' | 'system';
+  is_read: number;
+  created_at: Date;
+}
+
+// ─── 本地专用类型(本次重构不动) ─────────────────────────────────────────────
 
 interface ForumPost {
   id: number;
@@ -152,7 +194,6 @@ interface ForumPost {
   status: string;
   created_at: string;
   updated_at: string;
-  // joined fields
   author_username?: string;
   author_avatar?: string;
   category_name?: string;
@@ -170,14 +211,6 @@ interface ForumComment {
   author_username?: string;
   author_avatar?: string;
   replies?: ForumComment[];
-}
-
-interface ForumTopic {
-  id: number;
-  name: string;
-  slug: string;
-  category_id: number;
-  post_count: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -198,7 +231,7 @@ function formatDate(dateStr: string): string {
 router.get('/forum/categories', async (_req, res) => {
   try {
     const db = getForumDatabaseClient();
-    const categories = await db.queryMany<ForumCategory>(
+    const categories = await db.queryMany<ForumCategoryRow>(
       `SELECT fc.*,
         (SELECT COUNT(*) FROM forum_posts WHERE category_id = fc.id AND status = 'published') AS real_post_count
        FROM forum_categories fc
@@ -1960,29 +1993,6 @@ router.post('/forum/upload-video', uploadLimiter, requireAuth, forumVideoUpload.
 // 私信功能
 // ════════════════════════════════════════════════════════════════════════════════
 
-interface ForumMessage {
-  id: number;
-  conversation_id: string;
-  sender_id: number;
-  receiver_id: number;
-  content: string;
-  message_type: 'text' | 'image' | 'system';
-  is_read: number;
-  created_at: Date;
-}
-
-interface ForumConversation {
-  id: string;
-  participant_a: number;
-  participant_b: number;
-  last_message_content: string;
-  last_message_at: Date;
-  unread_count_a: number;
-  unread_count_b: number;
-  created_at: Date;
-  updated_at: Date;
-}
-
 // 生成会话 ID：确保同一对用户只有一个会话
 function generateConversationId(userId1: number, userId2: number): string {
   const a = Math.min(userId1, userId2);
@@ -1991,7 +2001,7 @@ function generateConversationId(userId1: number, userId2: number): string {
 }
 
 // 获取会话的另一个参与者信息
-async function getOtherParticipant(conversation: ForumConversation, currentUserId: number, mainDb: ReturnType<typeof getDatabaseClient>): Promise<{ id: number; username: string; avatar_url: string } | null> {
+async function getOtherParticipant(conversation: ForumConversationRow, currentUserId: number, mainDb: ReturnType<typeof getDatabaseClient>): Promise<{ id: number; username: string; avatar_url: string } | null> {
   const otherId = conversation.participant_a === currentUserId ? conversation.participant_b : conversation.participant_a;
   return (await mainDb.queryOne<{ id: number; username: string; avatar_url: string }>(
     'SELECT id, username, avatar_url FROM users WHERE id = ?',
@@ -2005,7 +2015,7 @@ router.get('/forum/messages/conversations', requireAuth, async (req: AuthRequest
   const mainDb = getDatabaseClient();
   const userId = req.user!.id;
 
-  const conversations = await db.queryMany<ForumConversation>(
+  const conversations = await db.queryMany<ForumConversationRow>(
     `SELECT * FROM forum_conversations
      WHERE participant_a = ? OR participant_b = ?
      ORDER BY last_message_at DESC`,
@@ -2068,7 +2078,7 @@ router.post('/forum/messages/conversations', requireAuth, async (req: AuthReques
 
   // 确保会话存在
   const conversationId = generateConversationId(currentUserId, receiver_id);
-  let conversation = await db.queryOne<ForumConversation>(
+  let conversation = await db.queryOne<ForumConversationRow>(
     'SELECT * FROM forum_conversations WHERE id = ?',
     [conversationId]
   );
@@ -2078,7 +2088,7 @@ router.post('/forum/messages/conversations', requireAuth, async (req: AuthReques
       'INSERT INTO forum_conversations (id, participant_a, participant_b, last_message_content, last_message_at) VALUES (?, ?, ?, ?, NOW())',
       [conversationId, Math.min(currentUserId, receiver_id), Math.max(currentUserId, receiver_id), '']
     );
-    conversation = await db.queryOne<ForumConversation>(
+    conversation = await db.queryOne<ForumConversationRow>(
       'SELECT * FROM forum_conversations WHERE id = ?',
       [conversationId]
     );
@@ -2138,7 +2148,7 @@ router.get('/forum/messages/:conversationId', requireAuth, async (req: AuthReque
   const offset = (pageNum - 1) * pageSize;
 
   // 验证用户是该会话的参与者
-  const conversation = await db.queryOne<ForumConversation>(
+  const conversation = await db.queryOne<ForumConversationRow>(
     'SELECT * FROM forum_conversations WHERE id = ? AND (participant_a = ? OR participant_b = ?)',
     [conversationId, userId, userId]
   );
@@ -2264,7 +2274,7 @@ router.post('/forum/messages', requireAuth, messageLimiter, async (req: AuthRequ
   const conversationId = generateConversationId(senderId, receiver_id);
 
   // 获取或创建会话
-  let conversation = await db.queryOne<ForumConversation>(
+  let conversation = await db.queryOne<ForumConversationRow>(
     'SELECT * FROM forum_conversations WHERE id = ?',
     [conversationId]
   );
@@ -2274,7 +2284,7 @@ router.post('/forum/messages', requireAuth, messageLimiter, async (req: AuthRequ
       'INSERT INTO forum_conversations (id, participant_a, participant_b, last_message_content, last_message_at) VALUES (?, ?, ?, ?, NOW())',
       [conversationId, Math.min(senderId, receiver_id), Math.max(senderId, receiver_id), content.slice(0, 200)]
     );
-    conversation = await db.queryOne<ForumConversation>(
+    conversation = await db.queryOne<ForumConversationRow>(
       'SELECT * FROM forum_conversations WHERE id = ?',
       [conversationId]
     );
@@ -2337,7 +2347,7 @@ router.put('/forum/messages/:conversationId/read', requireAuth, async (req: Auth
   const userId = req.user!.id;
 
   // 验证用户是该会话的参与者
-  const conversation = await db.queryOne<ForumConversation>(
+  const conversation = await db.queryOne<ForumConversationRow>(
     'SELECT * FROM forum_conversations WHERE id = ? AND (participant_a = ? OR participant_b = ?)',
     [conversationId, userId, userId]
   );
@@ -2370,7 +2380,7 @@ router.delete('/forum/messages/:conversationId', requireAuth, async (req: AuthRe
   const raw = req.params.conversationId;
   const conversationId = decodeURIComponent(Array.isArray(raw) ? raw[0] : raw);
 
-  const conversation = await db.queryOne<ForumConversation>(
+  const conversation = await db.queryOne<ForumConversationRow>(
     'SELECT * FROM forum_conversations WHERE id = ? AND (participant_a = ? OR participant_b = ?)',
     [conversationId, userId, userId]
   );
@@ -2491,29 +2501,6 @@ router.get('/forum/blocks', requireAuth, async (req: AuthRequest, res) => {
 // ════════════════════════════════════════════════════════════════════════════════
 // 用户资料与关注功能
 // ════════════════════════════════════════════════════════════════════════════════
-
-interface ForumUserProfile {
-  user_id: number;
-  bio: string;
-  location: string;
-  website: string;
-  social_links: string;
-  post_count: number;
-  follower_count: number;
-  following_count: number;
-  created_at: Date;
-  updated_at: Date;
-}
-
-interface ForumUser {
-  id: number;
-  username: string;
-  avatar_url: string;
-  email?: string;
-  role?: string;
-  vip_level?: string;
-  forum_profile?: ForumUserProfile;
-}
 
 // 获取用户资料
 router.get('/forum/users/:userId', async (req, res) => {

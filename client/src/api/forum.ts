@@ -1,22 +1,21 @@
 import { request } from './request';
 import { requestUploadTarget, uploadFileToTarget, type DirectUploadTarget } from './directUpload';
 
-export interface ForumCategory {
-  id: number;
-  name: string;
-  slug: string;
-  icon: string;
-  description: string;
-  sort_order: number;
-  post_count: number;
-}
-
-export interface ForumTopic {
-  id: number;
-  name: string;
-  slug: string;
-  post_count: number;
-}
+// 共享类型(API 契约)从 shared/forum 统一引入,这里是向后兼容的 re-export
+export type {
+  ForumCategory,
+  ForumTopic,
+  ForumMessageType,
+  ForumMessage,
+  ForumConversationOtherUser,
+  ForumConversation,
+  SocialLinks,
+  ForumUserProfile,
+  ForumUser,
+  Pagination,
+  PaginatedList,
+  ApiError,
+} from '@shared/forum';
 
 export interface ForumPost {
   id: number;
@@ -528,31 +527,6 @@ export async function exchangeDownloadWithPoints() {
 // 私信功能
 // ════════════════════════════════════════════════════════════════════════════════
 
-export interface ForumMessage {
-  id: number;
-  conversation_id: string;
-  sender_id: number;
-  receiver_id: number;
-  content: string;
-  message_type: 'text' | 'image' | 'system';
-  is_read: number;
-  created_at: string;
-  sender_username?: string;
-  sender_avatar?: string;
-}
-
-export interface ForumConversation {
-  id: string;
-  other_user: {
-    id: number;
-    username: string;
-    avatar_url: string | null;
-  } | null;
-  last_message_content: string;
-  last_message_at: string;
-  unread_count: number;
-}
-
 // 获取会话列表
 export async function fetchMessageConversations() {
   return request<{ conversations: ForumConversation[] }>('/api/forum/messages/conversations');
@@ -602,24 +576,6 @@ export async function fetchUnreadMessageCount() {
 // ════════════════════════════════════════════════════════════════════════════════
 // 用户资料与关注功能
 // ════════════════════════════════════════════════════════════════════════════════
-
-export interface ForumUserProfile {
-  user_id: number;
-  bio: string;
-  location: string;
-  website: string;
-  social_links: Record<string, string>;
-  post_count: number;
-  follower_count: number;
-  following_count: number;
-}
-
-export interface ForumUser {
-  id: number;
-  username: string;
-  avatar_url: string | null;
-  forum_profile?: ForumUserProfile;
-}
 
 // 获取用户资料
 export async function fetchForumUser(userId: number) {

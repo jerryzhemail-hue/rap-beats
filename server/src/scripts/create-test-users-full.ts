@@ -15,7 +15,7 @@
 
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
-import mysql from 'mysql2/promise';
+import mysql, { RowDataPacket } from 'mysql2/promise';
 
 // ⛔ 保护:此脚本只允许在本地开发环境运行,严禁在生产数据库跑
 if (process.env.NODE_ENV === 'production') {
@@ -138,7 +138,10 @@ async function main() {
   );
 
   // 获取 admin id
-  const [adminRows] = await conn.query('SELECT id FROM users WHERE username = ?', ['testadmin']);
+  const [adminRows] = await conn.query<RowDataPacket[] & { id: number }[]>(
+    'SELECT id FROM users WHERE username = ?',
+    ['testadmin']
+  );
   const adminId = adminRows[0]?.id || 1;
 
   // ========================================
@@ -157,9 +160,14 @@ async function main() {
       [user.username, user.email, hash, user.vip, user.vip === 'free' ? null : future]
     );
 
-    const [rows] = await conn.query('SELECT id FROM users WHERE username = ?', [user.username]);
-    userIds[user.username] = rows[0].id;
-    console.log(`  ✓ ${user.username} (id=${rows[0].id}, vip=${user.vip})`);
+    const [rows] = await conn.query<(RowDataPacket & { id: number })[]>(
+      'SELECT id FROM users WHERE username = ?',
+      [user.username]
+    );
+    const userId = rows[0]?.id;
+    if (!userId) throw new Error(`用户 ${user.username} 插入后未查到 id`);
+    userIds[user.username] = userId;
+    console.log(`  ✓ ${user.username} (id=${userId}, vip=${user.vip})`);
   }
 
   // ========================================
