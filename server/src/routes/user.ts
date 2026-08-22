@@ -276,7 +276,7 @@ router.get('/user/vip-status', requireAuth, async (req: AuthRequest, res) => {
   });
 });
 
-// GET /api/users/search — 搜索全站用户（用于私信发起聊天）
+// GET /api/users/search — 搜索全站用户（支持用户名/邮箱/手机号）
 router.get('/users/search', requireAuth, async (req: AuthRequest, res) => {
   const db = getDatabaseClient();
   const q = (req.query.q as string || '').trim();
@@ -286,26 +286,57 @@ router.get('/users/search', requireAuth, async (req: AuthRequest, res) => {
     return res.json({ users: [] });
   }
 
-  // rap_beats_dev.users 表字段：id, username, email, password_hash, role,
-  // created_at, is_vip, vip_expire_at, vip_level, avatar_url
-  // 排除自己，按用户名/邮箱模糊匹配，精确匹配优先
-  const users = await db.queryMany<{ id: number; username: string; email: string; avatar_url: string }>(
-    `SELECT id, username, email, avatar_url
+  // 拉黑过滤：排除我拉黑的人，以及拉黑我的人
+  const blockedMe = await db.queryMany<{ blocker_id: number }>(
+    'SELECT blocker_id FROM user_blocks WHERE blocked_id = ?',
+    [req.user!.id]
+  );
+  const iBlocked = await db.queryMany<{ blocked_id: number }>(
+    'SELECT blocked_id FROM user_blocks WHERE blocker_id = ?',
+    [req.user!.id]
+  );
+  const excludeIds = [req.user!.id, ...blockedMe.map(b => b.blocker_id), ...iBlocked.map(b => b.blocked_id)];
+  const excludePlaceholders = excludeIds.map(() => '?').join(',');
+
+  // 先探测 users 表是否包含 phone / email 字段，缺失时跳过对应匹配条件，避免 1054 报错
+  const cols = await db.queryMany<{ COLUMN_NAME: string }>(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'`
+  );
+  const colSet = new Set(cols.map(c => c.COLUMN_NAME));
+  const hasEmail = colSet.has('email');
+  const hasPhone = colSet.has('phone');
+  const hasAvatarUrl = colSet.has('avatar_url');
+  const avatarCol = hasAvatarUrl ? 'avatar_url' : (colSet.has('avatar') ? 'avatar' : 'NULL');
+
+  const conditions: string[] = ['username LIKE ?'];
+  const params: any[] = [`%${q}%`];
+  if (hasEmail) {
+    conditions.push('email LIKE ?');
+    params.push(`%${q}%`);
+  }
+  if (hasPhone) {
+    conditions.push('phone = ?', 'phone LIKE ?');
+    params.push(q, `%${q}%`);
+  }
+
+  const users = await db.queryMany<{ id: number; username: string; email: string; phone: string | null; avatar_url: string }>(
+    `SELECT id, username, email, phone, ${avatarCol} AS avatar_url
        FROM users
-      WHERE id != ?
-        AND (username LIKE ? OR email LIKE ?)
+      WHERE id NOT IN (${excludePlaceholders})
+        AND (${conditions.join(' OR ')})
       ORDER BY
         CASE WHEN username = ? THEN 0
              WHEN username LIKE ? THEN 1
              ELSE 2 END,
         id ASC
       LIMIT ?`,
-    [req.user!.id, `%${q}%`, `%${q}%`, q, `${q}%`, limit]
+    [...excludeIds, ...params, q, `${q}%`, limit]
   );
 
   res.json({ users: users.map(u => ({
     id: u.id,
-    username: u.username || u.email,
+    username: u.username || u.email || u.phone || `用户${u.id}`,
     avatar_url: u.avatar_url || null,
   })) });
 });

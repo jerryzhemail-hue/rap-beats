@@ -2027,6 +2027,76 @@ router.get('/forum/messages/conversations', requireAuth, async (req: AuthRequest
   res.json({ conversations: result });
 });
 
+// 创建/确保会话存在（不发送消息，用于从外部跳转私信时预创建会话）
+router.post('/forum/messages/conversations', requireAuth, async (req: AuthRequest, res) => {
+  const db = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const currentUserId = req.user!.id;
+  const { receiver_id } = req.body as { receiver_id?: number };
+
+  if (!receiver_id || !Number.isInteger(receiver_id) || receiver_id <= 0) {
+    return res.status(400).json({ error: '无效的 receiver_id' });
+  }
+
+  if (receiver_id === currentUserId) {
+    return res.status(400).json({ error: '不能和自己私信' });
+  }
+
+  // 检查对方是否存在
+  const receiver = await mainDb.queryOne<{ id: number; username: string }>(
+    'SELECT id, username FROM users WHERE id = ?',
+    [receiver_id]
+  );
+  if (!receiver) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+
+  // 检查拉黑关系
+  const blockCheck = await mainDb.queryOne<{ blocked_by_me: number; blocked_me: number }>(
+    `SELECT
+       (SELECT 1 FROM user_blocks WHERE blocker_id = ? AND blocked_id = ? LIMIT 1) AS blocked_by_me,
+       (SELECT 1 FROM user_blocks WHERE blocker_id = ? AND blocked_id = ? LIMIT 1) AS blocked_me`,
+    [currentUserId, receiver_id, receiver_id, currentUserId]
+  );
+
+  if (blockCheck?.blocked_by_me) {
+    return res.status(403).json({ error: '你已拉黑该用户，无法发起私信' });
+  }
+  if (blockCheck?.blocked_me) {
+    return res.status(403).json({ error: '你已被对方拉黑，无法发起私信' });
+  }
+
+  // 确保会话存在
+  const conversationId = generateConversationId(currentUserId, receiver_id);
+  let conversation = await db.queryOne<ForumConversation>(
+    'SELECT * FROM forum_conversations WHERE id = ?',
+    [conversationId]
+  );
+
+  if (!conversation) {
+    await db.execute(
+      'INSERT INTO forum_conversations (id, participant_a, participant_b, last_message_content, last_message_at) VALUES (?, ?, ?, ?, NOW())',
+      [conversationId, Math.min(currentUserId, receiver_id), Math.max(currentUserId, receiver_id), '']
+    );
+    conversation = await db.queryOne<ForumConversation>(
+      'SELECT * FROM forum_conversations WHERE id = ?',
+      [conversationId]
+    );
+  }
+
+  const unreadCount = conversation!.participant_a === currentUserId
+    ? conversation!.unread_count_a
+    : conversation!.unread_count_b;
+
+  res.json({
+    id: conversation!.id,
+    other_user: { id: receiver.id, username: receiver.username, avatar_url: null },
+    last_message_content: conversation!.last_message_content || '',
+    last_message_at: conversation!.last_message_at,
+    unread_count: unreadCount,
+  });
+});
+
 // 获取未读消息总数（必须在 :conversationId 之前）
 router.get('/forum/messages/unread-count', requireAuth, async (req: AuthRequest, res) => {
   const db = getForumDatabaseClient();
@@ -2816,6 +2886,66 @@ router.get('/forum/users/:userId/followings', async (req: AuthRequest, res) => {
 
   res.json({
     followings: result,
+    pagination: {
+      page: pageNum,
+      page_size: pageSize,
+      total,
+      total_pages: Math.ceil(total / pageSize),
+    },
+  });
+});
+
+// GET /api/forum/friends — 获取互相关注的好友列表
+router.get('/forum/friends', requireAuth, async (req: AuthRequest, res) => {
+  const forumDb = getForumDatabaseClient();
+  const mainDb = getDatabaseClient();
+  const userId = req.user!.id;
+  const { page = '1', page_size = '20' } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, parseInt(page));
+  const pageSize = Math.min(50, Math.max(1, parseInt(page_size)));
+  const offset = (pageNum - 1) * pageSize;
+
+  // 互相关注：A 关注 B 且 B 关注 A
+  const [{ total }] = await forumDb.queryMany<{ total: number }>(
+    `SELECT COUNT(*) as total
+     FROM forum_follows f1
+     JOIN forum_follows f2
+       ON f1.following_id = f2.follower_id
+      AND f2.following_id = f1.follower_id
+     WHERE f1.follower_id = ?`,
+    [userId]
+  );
+
+  const friends = await forumDb.queryMany<{ following_id: number; followed_at: Date }>(
+    `SELECT f1.following_id, f1.created_at as followed_at
+     FROM forum_follows f1
+     JOIN forum_follows f2
+       ON f1.following_id = f2.follower_id
+      AND f2.following_id = f1.follower_id
+     WHERE f1.follower_id = ?
+     ORDER BY f1.created_at DESC
+     LIMIT ? OFFSET ?`,
+    [userId, pageSize, offset]
+  );
+
+  if (friends.length === 0) {
+    return res.json({ friends: [], pagination: { page: pageNum, page_size: pageSize, total: 0, total_pages: 0 } });
+  }
+
+  const userIds = friends.map(f => f.following_id);
+  const users = await mainDb.queryMany<{ id: number; username: string; avatar_url: string }>(
+    `SELECT id, username, avatar_url FROM users WHERE id IN (${userIds.map(() => '?').join(',')})`,
+    userIds
+  );
+
+  const userMap = new Map(users.map(u => [u.id, u]));
+  const result = friends.map(f => ({
+    ...userMap.get(f.following_id),
+    followed_at: f.followed_at,
+  }));
+
+  res.json({
+    friends: result,
     pagination: {
       page: pageNum,
       page_size: pageSize,

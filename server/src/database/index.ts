@@ -30,14 +30,20 @@ export async function initDatabase(db: import('./client.js').DatabaseClient, for
       username VARCHAR(50) NOT NULL UNIQUE,
       email VARCHAR(255) NOT NULL UNIQUE,
       password_hash VARCHAR(255) NOT NULL,
+      phone VARCHAR(20) NULL,
       role VARCHAR(20) DEFAULT 'user',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       is_vip TINYINT DEFAULT 0,
       vip_expire_at DATETIME NULL,
       vip_level VARCHAR(20) DEFAULT 'free',
-      avatar_url TEXT NULL
+      avatar_url TEXT NULL,
+      INDEX idx_users_phone (phone)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  // 确保 phone 字段存在（已有表升级时）
+  try { await db.execute("ALTER TABLE users ADD COLUMN phone VARCHAR(20) NULL AFTER password_hash"); } catch (_) { /* ignore */ }
+  try { await db.execute("CREATE INDEX idx_users_phone ON users(phone)"); } catch (_) { /* ignore */ }
 
   // beats 表
   await db.execute(`
