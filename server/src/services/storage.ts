@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import OSS from 'ali-oss';
 import { fileURLToPath } from 'url';
+import { config } from '../config.js';
 
 export type StorageKind =
   | 'audio'
@@ -67,11 +68,7 @@ const PUBLIC_PREFIX: Record<StorageKind, string> = {
 let ossClient: OSS | null = null;
 
 function getStorageDriver(): StorageDriver {
-  const driver = (process.env.STORAGE_DRIVER || 'local').toLowerCase();
-  if (driver === 'local' || driver === 'oss' || driver === 'cos' || driver === 's3') {
-    return driver;
-  }
-  return 'local';
+  return config().storage.driver;
 }
 
 function isRemoteUrl(value: string): boolean {
@@ -96,39 +93,30 @@ function normalizeBaseUrl(url: string): string {
 }
 
 function getOssPrefix(kind: StorageKind): string {
-  const fromEnv = {
-    audio: process.env.OSS_AUDIO_PREFIX,
-    cover: process.env.OSS_COVER_PREFIX,
-    avatar: process.env.OSS_AVATAR_PREFIX,
-    banner: process.env.OSS_BANNER_PREFIX,
-    forum_image: process.env.OSS_FORUM_IMAGE_PREFIX,
-    forum_audio: process.env.OSS_FORUM_AUDIO_PREFIX,
-    forum_video: process.env.OSS_FORUM_VIDEO_PREFIX,
-    forum_video_cover: process.env.OSS_FORUM_VIDEO_COVER_PREFIX
-  }[kind];
+  const fromEnv = config().storage.ossPrefixes[kind === 'forum_video_cover' ? 'forum_video_cover' : kind];
 
-  return (
-    fromEnv ||
-    {
-      audio: 'audio',
-      cover: 'covers',
-      avatar: 'avatars',
-      banner: 'banners',
-      forum_image: 'forum-images',
-      forum_audio: 'forum-audio',
-      forum_video: 'forum-video',
-      forum_video_cover: 'forum-video-covers'
-    }[kind]
-  ).replace(/^\/+|\/+$/g, '');
+  return (fromEnv || {
+    audio: 'audio',
+    cover: 'covers',
+    avatar: 'avatars',
+    banner: 'banners',
+    forum_image: 'forum-images',
+    forum_audio: 'forum-audio',
+    forum_video: 'forum-video',
+    forum_video_cover: 'forum-video-covers'
+  }[kind]).replace(/^\/+|\/+$/g, '');
 }
 
 function inferOssPublicBaseUrl(): string {
-  const explicit = process.env.OSS_PUBLIC_BASE_URL;
+  const oss = config().oss;
+  const explicit = oss?.publicBaseUrl;
   if (explicit) return normalizeBaseUrl(explicit);
 
-  const bucket = process.env.OSS_BUCKET;
-  const endpoint = process.env.OSS_ENDPOINT;
-  const region = process.env.OSS_REGION;
+  if (!oss) {
+    throw new Error('Missing OSS_BUCKET for OSS storage driver.');
+  }
+
+  const { bucket, endpoint, region } = oss;
 
   if (!bucket) {
     throw new Error('Missing OSS_BUCKET for OSS storage driver.');
@@ -148,22 +136,20 @@ function inferOssPublicBaseUrl(): string {
 function getOssClient(): OSS {
   if (ossClient) return ossClient;
 
-  const region = process.env.OSS_REGION;
-  const bucket = process.env.OSS_BUCKET;
-  const accessKeyId = process.env.OSS_ACCESS_KEY_ID;
-  const accessKeySecret = process.env.OSS_ACCESS_KEY_SECRET;
-
-  if (!region || !bucket || !accessKeyId || !accessKeySecret) {
+  const oss = config().oss;
+  if (!oss) {
     throw new Error('OSS storage requires OSS_REGION, OSS_BUCKET, OSS_ACCESS_KEY_ID and OSS_ACCESS_KEY_SECRET.');
   }
+
+  const { region, bucket, accessKeyId, accessKeySecret, endpoint, stsToken } = oss;
 
   ossClient = new OSS({
     region,
     bucket,
     accessKeyId,
     accessKeySecret,
-    endpoint: process.env.OSS_ENDPOINT || undefined,
-    stsToken: process.env.OSS_STS_TOKEN || undefined,
+    endpoint: endpoint || undefined,
+    stsToken: stsToken || undefined,
     secure: true
   });
 

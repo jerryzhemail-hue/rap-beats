@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise';
+import { config } from '../config.js';
 
 export type SqlParams = readonly unknown[];
 
@@ -117,10 +118,10 @@ function createPool(config: {
   user: string;
   password: string;
   database: string;
+  connectionLimit: number;
 }): mysql.Pool {
   return mysql.createPool({
     ...config,
-    connectionLimit: parseInt(process.env.DB_POOL_SIZE || '10', 10),
     waitForConnections: true,
     queueLimit: 0,
     idleTimeout: 60 * 1000,
@@ -130,37 +131,24 @@ function createPool(config: {
 }
 
 export function initMySqlDatabaseClientFromEnv() {
-  const host = process.env.DB_HOST || '127.0.0.1';
-  const port = Number(process.env.DB_PORT || '3306');
-  const user = process.env.DB_USER || '';
-  const password = process.env.DB_PASSWORD || '';
-  const database = process.env.DB_NAME || '';
-
-  if (!user || !database) {
-    throw new Error('MySQL config missing: DB_USER / DB_NAME are required');
-  }
-
-  mainMysqlPool = createPool({ host, port, user, password, database });
+  const { main } = config().db;
+  mainMysqlPool = createPool(main);
   mainDatabaseClient = null;
 }
 
 function initForumMySqlDatabaseClientFromEnv() {
-  const host = process.env.FORUM_DB_HOST || process.env.DB_HOST || '127.0.0.1';
-  const port = Number(process.env.FORUM_DB_PORT || process.env.DB_PORT || '3306');
-  const user = process.env.FORUM_DB_USER || process.env.DB_USER || '';
-  const password = process.env.FORUM_DB_PASSWORD || process.env.DB_PASSWORD || '';
-  const database = process.env.FORUM_DB_NAME || '';
+  const { main, forum } = config().db;
 
-  if (!database) {
+  if (forum.sharesMainPool) {
     forumMysqlPool = mainMysqlPool;
     forumDatabaseClient = null;
     return;
   }
 
-  if (!user) {
+  if (!forum.user) {
     throw new Error('Forum MySQL config missing: FORUM_DB_USER is required when FORUM_DB_NAME is set');
   }
 
-  forumMysqlPool = createPool({ host, port, user, password, database });
+  forumMysqlPool = createPool(forum);
   forumDatabaseClient = null;
 }

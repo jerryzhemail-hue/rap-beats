@@ -4,15 +4,14 @@ import { getDatabaseClient } from '../database/client.js';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { invalidateVipCache } from '../middleware/vip.js';
 import { toDateTimeString } from '../utils/timezone.js';
+import { config } from '../config.js';
 
 const router = Router();
 
-// 虎皮椒配置
-const XUNHU_APPID = process.env.XUNHU_APPID || '';
-const XUNHU_APPSECRET = process.env.XUNHU_APPSECRET || '';
-const XUNHU_GATEWAY = process.env.XUNHU_GATEWAY || 'https://api.xunhupay.com/payment/do.html';
-// 显式开启模拟支付（仅开发/测试环境使用，勿在生产环境启用）
-const MOCK_PAYMENT_ENABLED = process.env.MOCK_PAYMENT_ENABLED === 'true';
+// 虎皮椒配置(从 config() 读,延迟到首次使用,避免启动期硬性要求)
+function xunhu() {
+  return config().xunhu;
+}
 
 // 价格配置
 const PRICE_CONFIG: Record<string, { amount: string; name: string; days: number }> = {
@@ -53,11 +52,12 @@ router.post('/payment/create-order', requireAuth, async (req: AuthRequest, res: 
   const tradeOrderId = `ORDER_${Date.now()}_${req.user!.id}_${Math.random().toString(36).substring(7)}`;
 
   // 如果没有配置虎皮椒密钥且未开启模拟支付，拒绝真实充值请求
-  if (!XUNHU_APPID || !XUNHU_APPSECRET) {
-    if (!MOCK_PAYMENT_ENABLED) {
+  const x = xunhu();
+  if (!x.appId || !x.appSecret) {
+    if (!x.mockEnabled) {
       return res.status(503).json({ error: '支付通道暂不可用，请稍后再试' });
     }
-    // 模拟支付：仅在 MOCK_PAYMENT_ENABLED=true 时可用
+    // 模拟支付：仅在 x.mockEnabled=true 时可用
     const insert = await database.execute(
       'INSERT INTO orders (user_id, vip_level, amount, stripe_session_id, status) VALUES (?, ?, ?, ?, ?)',
       [req.user!.id, vip_level, parseFloat(priceConfig.amount), tradeOrderId, 'completed']
@@ -108,7 +108,7 @@ router.post('/payment/create-order', requireAuth, async (req: AuthRequest, res: 
 
   const params: Record<string, string> = {
     version: '1.1',
-    appid: XUNHU_APPID,
+    appid: x.appId,
     trade_order_id: tradeOrderId,
     total_fee: priceConfig.amount,
     title: priceConfig.name,
@@ -119,7 +119,7 @@ router.post('/payment/create-order', requireAuth, async (req: AuthRequest, res: 
     type: pay_type,
   };
 
-  params.sign = generateSign(params, XUNHU_APPSECRET);
+  params.sign = generateSign(params, x.appSecret);
 
   try {
     // 发起请求到虎皮椒
@@ -127,7 +127,7 @@ router.post('/payment/create-order', requireAuth, async (req: AuthRequest, res: 
       .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
       .join('&');
 
-    const response = await fetch(XUNHU_GATEWAY, {
+    const response = await fetch(x.gateway, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formBody,
@@ -151,21 +151,22 @@ router.post('/payment/create-order', requireAuth, async (req: AuthRequest, res: 
 router.post('/payment/notify', async (req: Request, res: Response) => {
   const database = getDatabaseClient();
   const params = req.body as Record<string, string>;
+  const x = xunhu();
 
-  if (!XUNHU_APPSECRET) {
+  if (!x.appSecret) {
     return res.status(400).send('not configured');
   }
 
   // 验签
-  const expectedSign = generateSign(params, XUNHU_APPSECRET);
+  const expectedSign = generateSign(params, x.appSecret);
   if (params.sign !== expectedSign) {
     console.error('回调验签失败');
     return res.status(400).send('sign error');
   }
 
   // 验证 appid 归属
-  if (params.appid && params.appid !== XUNHU_APPID) {
-    console.error('回调 appid 不匹配:', params.appid, 'expected:', XUNHU_APPID);
+  if (params.appid && params.appid !== x.appId) {
+    console.error('回调 appid 不匹配:', params.appid, 'expected:', x.appId);
     return res.status(400).send('appid mismatch');
   }
 
