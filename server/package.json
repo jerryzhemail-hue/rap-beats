@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "node --import tsx/esm --watch --watch-path=src src/index.ts",
     "create-admin": "node --import tsx/esm src/scripts/create-admin.ts",
+    "create-test-users": "node --import tsx/esm src/scripts/create-test-users.ts",
+    "create-test-users-batch": "node --import tsx/esm src/scripts/create-test-users-batch.ts",
     "migrate-local-assets-to-oss": "node --import tsx/esm src/scripts/migrate-local-assets-to-oss.ts",
-    "migrate-sqlite-to-mysql": "node --import tsx/esm src/scripts/migrate-sqlite-to-mysql.ts",
     "sanitize-forum": "node --import tsx/esm src/scripts/sanitize-forum-data.ts",
     "build": "tsc",
     "start": "node dist/index.js"

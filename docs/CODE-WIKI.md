@@ -564,7 +564,6 @@ Rapper 权重与排序计算。
 | [fill-missing-keys.ts](file:///Users/wangzhe/Documents/work/rap-beats/server/src/scripts/fill-missing-keys.ts) | 补全缺失的调性字段 |
 | [migrate-forum-data.ts](file:///Users/wangzhe/Documents/work/rap-beats/server/src/scripts/migrate-forum-data.ts) | 论坛数据迁移 |
 | [migrate-local-assets-to-oss.ts](file:///Users/wangzhe/Documents/work/rap-beats/server/src/scripts/migrate-local-assets-to-oss.ts) | 本地资产迁移到 OSS（`npm run migrate-local-assets-to-oss`） |
-| [migrate-sqlite-to-mysql.ts](file:///Users/wangzhe/Documents/work/rap-beats/server/src/scripts/migrate-sqlite-to-mysql.ts) | SQLite → MySQL 迁移（历史脚本，项目已仅支持 MySQL） |
 | [sanitize-forum-data.ts](file:///Users/wangzhe/Documents/work/rap-beats/server/src/scripts/sanitize-forum-data.ts) | 论坛数据消毒（`npm run sanitize-forum`） |
 | [generate-jwt-secret.js](file:///Users/wangzhe/Documents/work/rap-beats/server/src/scripts/generate-jwt-secret.js) | 生成 JWT 密钥 |
 | [api-full-test.mjs](file:///Users/wangzhe/Documents/work/rap-beats/server/src/scripts/api-full-test.mjs) | API 全量测试脚本 |

@@ -15,7 +15,6 @@ dist-ssr/
 .env.*.production
 !.env.example
 !server/.env.example
-!server/.env.mysql.example
 
 # Database (contains user data)
 server/data/*.db
@@ -62,6 +61,9 @@ Thumbs.db
 .env.*.production
 !.env.example
 !server/.env.example
-!server/.env.mysql.example
 test_audio/
 server/scripts/bpm_*.mjs
+
+# Local DB backups (not for version control — 任何 .sql / .dump / .tar.gz 都忽略)
+backups/
+!backups/.gitkeep
