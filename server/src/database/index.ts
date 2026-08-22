@@ -1,3 +1,21 @@
+/**
+ * 数据库初始化 — schema 单一来源
+ *
+ * ⚠️ 这是项目所有表结构的权威定义。任何 ALTER / 新表 / 新字段必须在这里加,
+ *    不要在 backups/*.sql 或 scripts/*.ts 里手动改库。
+ *
+ * 历史快照:
+ * - backups/production-snapshot-20260822/*.sql 是 2026-08-22 抓的线上库 dump,
+ *   仅作历史参考,不再维护。新机器初始化数据库时由 initDatabase() 自动完成。
+ *
+ * 设计原则:
+ * - 用 CREATE TABLE IF NOT EXISTS,新表自动创建
+ * - 老表加字段用 ALTER TABLE try-catch 包裹,错误吞掉(列已存在则跳过)
+ * - 字段顺序在 CREATE TABLE 内显式声明,ALTER 时也指定位置
+ *   (避免线上 MySQL 默认排序影响 ALTER 行为)
+ * - 数据迁移逻辑(比如 remove general category、sync topics)
+ *   放在 init 函数末尾,幂等执行
+ */
 import { getDatabaseClient, getForumDatabaseClient, initMySqlDatabaseClientFromEnv } from './client.js';
 
 export { getDatabaseClient, getForumDatabaseClient, initMySqlDatabaseClientFromEnv };
