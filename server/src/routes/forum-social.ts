@@ -1,4 +1,5 @@
 import { createForumRouter, getForumDatabaseClient, getDatabaseClient, requireAuth, type AuthRequest, enrichWithUsers, type ForumUser, type ForumUserProfile } from './forum-common.js';
+import { createNotification } from './forum-notifications-helper.js';
 import fs from 'fs';
 
 const router = createForumRouter();
@@ -307,6 +308,9 @@ router.post('/forum/users/:userId/follow', requireAuth, async (req: AuthRequest,
      ON DUPLICATE KEY UPDATE follower_count = follower_count + 1`,
     [followingId]
   );
+
+  // 发送关注通知
+  await createNotification(followingId, 'follow', followerId);
 
   res.status(201).json({ success: true, message: '关注成功' });
 });

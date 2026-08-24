@@ -25,11 +25,13 @@ import {
   deleteStoredAsset,
   getSignedAssetUrl,
   isRemoteStorageEnabled,
+  normalizeStoredAssetValue,
   resolveLocalAssetPath,
   saveBuffer,
   supportsDirectUpload
 } from '../services/storage.js';
 import { serializeBeatAssets } from '../utils/assets.js';
+import { normalizeArtistName } from '../utils/artistNames.js';
 import { toDateTimeString } from '../utils/timezone.js';
 import { invalidateVipCache, recordPreviewAccess, getGuestTodayPreviewCount, extractGuestSessionId, GUEST_PREVIEW_LIMIT } from '../middleware/vip.js';
 import { updateRapperSortOrderByName } from '../services/rapperScore.js';
@@ -865,7 +867,17 @@ router.put('/beats/:id', requireAuth, async (req: AuthRequest, res: Response) =>
     }
   }
 
-  const nextCoverImage = cover_image === undefined ? beat.cover_image : cover_image;
+  // 客户端可能传回 /covers/xxx.jpg 这类公开 URL,先还原成数据库存储值,
+  // 避免和旧值比较时误判为新封面,进而把刚上传的文件删掉。
+  const nextCoverImage = cover_image === undefined
+    ? beat.cover_image
+    : cover_image == null
+      ? null
+      : normalizeStoredAssetValue('cover', cover_image);
+
+  // 参与 rapper 频道关联的名字来自 producer + rapper 两个字段,
+  // 都用 & 分隔合作者;字段未传时沿用数据库旧值。
+  const finalProducer = producer === undefined ? beat.producer : producer;
   const finalRapper = rapper === undefined ? beat.rapper : rapper;
 
   await database.execute(`
@@ -883,50 +895,48 @@ router.put('/beats/:id', requireAuth, async (req: AuthRequest, res: Response) =>
     WHERE id = ?
   `, [title, producer, finalRapper, bpm, key, genre, tags, nextCoverImage, is_free, is_vip_only, id]);
 
-  // 同步 rapper 关联到 beat_producers 表
-  if (finalRapper) {
-    // 解析所有 producer 和 rapper 名字（支持 & 分隔的合作作品）
-    const allNames: string[] = [];
-    
-    if (producer) {
-      if (producer.includes('&')) {
-        allNames.push(...(producer.split('&') as string[]).map(n => n.trim()).filter(n => n));
-      } else {
-        allNames.push(producer.trim());
-      }
+  // 同步「制作人」关联到 beat_producers 表(频道按 producer 组织)。
+  // producer 为空时才回退到 rapper;合作者用 & 分隔,并做同人不同写法归一化。
+  const namesToSync = new Set<string>();
+  const collectNames = (value: string | null | undefined) => {
+    if (!value) return;
+    for (const part of value.split('&')) {
+      const name = normalizeArtistName(part.trim());
+      if (name) namesToSync.add(name);
     }
-    
-    if (finalRapper.includes('&')) {
-      allNames.push(...(finalRapper.split('&') as string[]).map(n => n.trim()).filter(n => n));
-    } else {
-      allNames.push(finalRapper.trim());
-    }
+  };
+  if (finalProducer && finalProducer.trim()) {
+    collectNames(finalProducer);
+  } else {
+    collectNames(finalRapper);
+  }
 
-    // 确保所有名字都有 rapper 记录，并创建 beat_producers 关联
-    for (const name of allNames) {
-      if (!name) continue;
-      await ensureRapperExists(database, name);
-      
-      const rapperRecord = await database.queryOne<{ id: number }>(
-        'SELECT id FROM rappers WHERE name = ?',
-        [name]
-      );
-      
-      await database.execute(
-        `INSERT INTO beat_producers (beat_id, rapper_id, rapper_name) VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE rapper_id = COALESCE(rapper_id, VALUES(rapper_id)), rapper_name = VALUES(rapper_name)`,
-        [id, rapperRecord?.id || null, name]
-      );
-    }
+  // 编辑会覆盖当前关联,先清掉旧记录,再按最新名字重建(避免改名后残留旧关联)
+  await database.execute('DELETE FROM beat_producers WHERE beat_id = ?', [id]);
+
+  for (const name of namesToSync) {
+    await ensureRapperExists(database, name);
+
+    const rapperRecord = await database.queryOne<{ id: number }>(
+      'SELECT id FROM rappers WHERE name = ?',
+      [name]
+    );
+
+    await database.execute(
+      `INSERT INTO beat_producers (beat_id, rapper_id, rapper_name) VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE rapper_id = VALUES(rapper_id), rapper_name = VALUES(rapper_name)`,
+      [id, rapperRecord?.id || null, name]
+    );
   }
 
   if (beat.cover_image && nextCoverImage !== beat.cover_image) {
     await deleteStoredAsset('cover', beat.cover_image);
   }
 
-  // 更新关联 rapper 的权重
-  if (finalRapper) {
-    const primaryRapper = finalRapper.includes('&') ? finalRapper.split('&')[0].trim() : finalRapper;
+  // 更新关联 rapper 的权重(优先取 rapper 字段,否则取 producer 第一个名字)
+  const weightName = finalRapper || finalProducer;
+  if (weightName) {
+    const primaryRapper = weightName.includes('&') ? weightName.split('&')[0].trim() : weightName;
     updateRapperSortOrderByName(primaryRapper).catch(err => {
       console.error('Failed to update rapper weight after edit:', err);
     });

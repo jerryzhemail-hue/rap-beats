@@ -25,6 +25,7 @@ import {
   type ForumCategoryRow,
   type ForumComment,
 } from './forum-common.js';
+import { createNotification } from './forum-notifications-helper.js';
 import fs from 'fs';
 
 const router = createForumRouter();
@@ -304,6 +305,9 @@ router.post('/forum/posts/:id/like', likeLimiter, requireAuth, async (req: AuthR
             description: `帖子被点赞奖励 ${availablePoints} 积分`,
           });
         }
+
+        // 发送点赞通知
+        await createNotification(post.user_id, 'like_post', userId, 'post', parseInt(id as string));
       }
 
       return res.json({ liked: true, like_count: post?.like_count ?? 0 });
@@ -520,6 +524,28 @@ router.post('/forum/posts/:id/comments', commentLimiter, requireAuth, async (req
     const mainDb = getDatabaseClient();
     const enriched = await enrichWithUsers([comment!], mainDb);
 
+    // 获取帖子标题用于通知
+    const postInfo = await db.queryOne<{ title: string; user_id: number }>(
+      'SELECT title, user_id FROM forum_posts WHERE id = ?',
+      [id]
+    );
+
+    // 通知帖子作者（如果是顶层评论且不是自己发的）
+    if (!parent_id && postInfo && postInfo.user_id !== req.user!.id) {
+      await createNotification(postInfo.user_id, 'comment', req.user!.id, 'post', parseInt(id as string), postInfo.title);
+    }
+
+    // 通知被回复的评论作者（如果是回复评论且不是自己发的）
+    if (parent_id) {
+      const parentComment = await db.queryOne<{ user_id: number }>(
+        'SELECT user_id FROM forum_comments WHERE id = ?',
+        [parent_id]
+      );
+      if (parentComment && parentComment.user_id !== req.user!.id) {
+        await createNotification(parentComment.user_id, 'comment', req.user!.id, 'comment', parseInt(id as string), postInfo?.title);
+      }
+    }
+
     // Phase 2: 评论积分奖励（只有顶层评论才奖励，防止刷分）
     let pointsEarned = 0;
     let totalPoints = 0;
@@ -613,6 +639,9 @@ router.post('/forum/comments/:id/like', likeLimiter, requireAuth, async (req: Au
             description: `评论被点赞奖励 ${availablePoints} 积分`,
           });
         }
+
+        // 发送评论点赞通知
+        await createNotification(updated.user_id, 'like_comment', userId, 'comment', parseInt(id as string));
       }
 
       return res.json({ liked: true, like_count: updated?.like_count ?? 0 });

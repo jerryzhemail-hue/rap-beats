@@ -696,6 +696,23 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
+  // ── 通知系统 ─────────────────────────────────────────────────────────────────
+  await forumDb.execute(`
+    CREATE TABLE IF NOT EXISTS forum_notifications (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL COMMENT '通知接收者',
+      type ENUM('like_post', 'like_comment', 'comment', 'follow', 'system') NOT NULL,
+      actor_id INT NOT NULL COMMENT '触发动作的用户',
+      target_type VARCHAR(50) DEFAULT NULL COMMENT '关联目标类型: post, comment',
+      target_id BIGINT DEFAULT NULL COMMENT '关联目标ID',
+      target_title VARCHAR(255) DEFAULT NULL COMMENT '关联目标标题(冗余存储,避免JOIN)',
+      is_read TINYINT DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_notifications_user (user_id, is_read, created_at),
+      INDEX idx_notifications_user_unread (user_id, is_read) USING BTREE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   // Remove "综合" (general) category if exists and migrate its posts
   try {
     const [generalCat] = await forumDb.queryMany<{ id: number }>(

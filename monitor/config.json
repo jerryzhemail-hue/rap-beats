@@ -1,0 +1,69 @@
+{
+  "port": 4000,
+  "fastIntervalSec": 15,
+  "slowIntervalSec": 60,
+  "historyLimit": 500,
+  "incidentLimit": 200,
+  "errorLogLimit": 400,
+  "targets": [
+    {
+      "id": "backend",
+      "name": "后端 API",
+      "group": "本地服务",
+      "type": "http",
+      "url": "http://127.0.0.1:3000/api/health",
+      "expectStatus": 200,
+      "timeoutMs": 4000,
+      "slow": false
+    },
+    {
+      "id": "frontend",
+      "name": "前端",
+      "group": "本地服务",
+      "type": "http",
+      "url": "http://127.0.0.1:5173/",
+      "expectStatus": 200,
+      "timeoutMs": 4000,
+      "slow": false
+    },
+    {
+      "id": "mysql",
+      "name": "MySQL",
+      "group": "本地依赖",
+      "type": "tcp",
+      "host": "127.0.0.1",
+      "port": 3307,
+      "timeoutMs": 3000,
+      "slow": false
+    }
+  ],
+  "ssh": {
+    "enabled": false,
+    "user": "root",
+    "host": "47.85.98.237",
+    "port": 22,
+    "deployDir": "/opt/rap-beats",
+    "timeoutMs": 15000,
+    "logTail": 80
+  },
+  "logs": [
+    {
+      "id": "backend",
+      "name": "后端日志",
+      "path": "/tmp/rap-beats-server.log",
+      "optional": false
+    },
+    {
+      "id": "frontend",
+      "name": "前端日志",
+      "path": "/Users/wangzhe/Documents/work/rap-beats/logs/frontend.log",
+      "optional": true
+    },
+    {
+      "id": "deploy",
+      "name": "部署日志",
+      "path": "/Users/wangzhe/Documents/work/rap-beats/logs/deploy.log",
+      "optional": true
+    }
+  ]
+}

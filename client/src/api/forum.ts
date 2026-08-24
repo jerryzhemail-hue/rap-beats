@@ -701,3 +701,67 @@ export async function searchUsers(query: string, limit = 20) {
     users: Array<{ id: number; username: string; avatar_url: string | null }>;
   }>(`/api/users/search?q=${encodeURIComponent(query)}&limit=${limit}`);
 }
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 通知功能
+// ════════════════════════════════════════════════════════════════════════════════
+
+export interface ForumNotification {
+  id: number;
+  user_id: number;
+  type: 'like_post' | 'like_comment' | 'comment' | 'follow' | 'system';
+  actor_id: number;
+  actor_username?: string;
+  actor_avatar?: string;
+  target_type?: string;
+  target_id?: number;
+  target_title?: string;
+  is_read: number;
+  created_at: string;
+  message: string;
+  time_ago: string;
+}
+
+// 获取通知列表
+export async function fetchNotifications(params: { page?: number; page_size?: number } = {}) {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.page_size) query.set('page_size', String(params.page_size));
+  return request<{
+    notifications: ForumNotification[];
+    pagination: { page: number; page_size: number; total: number; total_pages: number };
+  }>(`/api/forum/notifications?${query.toString()}`);
+}
+
+// 获取未读通知数
+export async function fetchUnreadNotificationCount() {
+  return request<{ unread_count: number }>('/api/forum/notifications/unread-count');
+}
+
+// 标记单条通知已读
+export async function markNotificationRead(id: number) {
+  return request<{ success: boolean }>(`/api/forum/notifications/${id}/read`, {
+    method: 'PUT',
+  });
+}
+
+// 全部已读
+export async function markAllNotificationsRead() {
+  return request<{ success: boolean }>('/api/forum/notifications/read-all', {
+    method: 'PUT',
+  });
+}
+
+// 删除通知
+export async function deleteNotification(id: number) {
+  return request<{ success: boolean }>(`/api/forum/notifications/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+// 清空所有通知
+export async function clearAllNotifications() {
+  return request<{ success: boolean }>('/api/forum/notifications/clear', {
+    method: 'DELETE',
+  });
+}

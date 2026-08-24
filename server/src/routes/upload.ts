@@ -4,6 +4,7 @@ import { requireAdmin, AuthRequest } from '../middleware/auth.js';
 import { getDatabaseClient } from '../database/client.js';
 import { createDirectUploadTarget, saveBuffer, saveText, supportsDirectUpload } from '../services/storage.js';
 import { serializeBeatAssets } from '../utils/assets.js';
+import { normalizeArtistName } from '../utils/artistNames.js';
 import { detectBpmFromBuffer } from '../services/bpmDetector.js';
 import type { DatabaseClient } from '../database/client.js';
 
@@ -132,9 +133,9 @@ async function createBeatRecord(
   const allProducerNames: string[] = [];
   if (payload.producer) {
     if (payload.producer.includes('&')) {
-      allProducerNames.push(...payload.producer.split('&').map(n => n.trim()).filter(n => n));
+      allProducerNames.push(...payload.producer.split('&').map(n => normalizeArtistName(n.trim())).filter(n => n));
     } else {
-      allProducerNames.push(payload.producer.trim());
+      allProducerNames.push(normalizeArtistName(payload.producer.trim()));
     }
   }
 
@@ -142,8 +143,8 @@ async function createBeatRecord(
   const allRapperNames: string[] = [];
   if (payload.rapper && payload.rapper.trim()) {
     const names = payload.rapper.includes('&')
-      ? payload.rapper.split('&').map(n => n.trim()).filter(n => n)
-      : [payload.rapper.trim()];
+      ? payload.rapper.split('&').map(n => normalizeArtistName(n.trim())).filter(n => n)
+      : [normalizeArtistName(payload.rapper.trim())];
     allRapperNames.push(...names);
   }
 
@@ -152,8 +153,8 @@ async function createBeatRecord(
     ? allRapperNames.join(' & ')
     : (payload.producer?.trim() || null);
 
-  // 确保所有 producer 和 rapper 都有 rapper 记录
-  const namesToEnsure = new Set([...allProducerNames, ...allRapperNames]);
+  // 频道按制作人(producer)组织；producer 为空时才回退到 rapper
+  const namesToEnsure = new Set(allProducerNames.length > 0 ? allProducerNames : allRapperNames);
   for (const name of namesToEnsure) {
     await ensureRapperExists(database, name);
   }
@@ -182,7 +183,7 @@ async function createBeatRecord(
     ]
   );
 
-  // 为每个 producer 和 rapper 创建 beat_producers 关联记录
+  // 为每个制作人(producer)创建 beat_producers 关联记录
   if (result.insertId) {
     for (const name of namesToEnsure) {
       const rapperRecord = await database.queryOne<{ id: number }>(
@@ -357,30 +358,25 @@ router.post('/beats/upload-direct', requireAdmin, async (req: AuthRequest, res) 
       })).storedValue;
     }
 
-    // 解析所有需要关联的 rapper 名字
-    // 优先级：1. 用户填写的 rapper（支持多个 & 分隔） 2. producer（作为 rapper）
+    // 解析 rapper 名字（用于 beats.rapper 字段）
     const allRapperNames: string[] = [];
     if (rapper && rapper.trim()) {
       const names = rapper.includes('&')
-        ? rapper.split('&').map(n => n.trim()).filter(n => n)
-        : [rapper.trim()];
+        ? rapper.split('&').map(n => normalizeArtistName(n.trim())).filter(n => n)
+        : [normalizeArtistName(rapper.trim())];
       allRapperNames.push(...names);
     } else if (producer && producer.trim()) {
-      allRapperNames.push(producer.trim());
+      allRapperNames.push(normalizeArtistName(producer.trim()));
     }
 
-    // 解析所有 producer 名字（支持 & 分隔的合作作品）
+    // 解析 producer 名字（用于频道关联）
     const allProducerNames: string[] = [];
-    if (producer) {
-      if (producer.includes('&')) {
-        allProducerNames.push(...producer.split('&').map(n => n.trim()).filter(n => n));
-      } else {
-        allProducerNames.push(producer.trim());
-      }
+    if (producer && producer.trim()) {
+      allProducerNames.push(...producer.split('&').map(n => normalizeArtistName(n.trim())).filter(n => n));
     }
 
-    // 确保所有 producer 和 rapper 都有 rapper 记录
-    const namesToEnsure = new Set([...allProducerNames, ...allRapperNames]);
+    // 频道按制作人(producer)组织；producer 为空时才回退到 rapper
+    const namesToEnsure = new Set(allProducerNames.length > 0 ? allProducerNames : allRapperNames);
     for (const name of namesToEnsure) {
       await ensureRapperExists(database, name);
     }
@@ -410,7 +406,7 @@ router.post('/beats/upload-direct', requireAdmin, async (req: AuthRequest, res) 
     );
 
     if (result.insertId) {
-      // 为每个 rapper（producer + 用户选的 rapper）创建 beat_producers 关联记录
+      // 为每个制作人(producer)创建 beat_producers 关联记录
       for (const rapperName of namesToEnsure) {
         const rapperRecord = await database.queryOne<{ id: number }>(
           'SELECT id FROM rappers WHERE name = ?',

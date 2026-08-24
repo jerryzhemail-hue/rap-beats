@@ -8,11 +8,13 @@ import MembershipBanner from '@/components/MembershipBanner.vue'
 import { usePlayerStore } from '@/stores/player'
 import { useAuthStore } from '@/stores/auth'
 import { useMessagesStore } from '@/stores/messages'
+import { useNotificationsStore } from '@/stores/notifications'
 
 const route = useRoute()
 const playerStore = usePlayerStore()
 const authStore = useAuthStore()
 const messagesStore = useMessagesStore()
+const notificationsStore = useNotificationsStore()
 const showMembershipBanner = ref(false)
 
 // 暴露给 AppHeader 调用
@@ -30,12 +32,13 @@ watch(
   }
 )
 
-// 私信实时推送：登录即建立 SSE 连接，登出即断开（全局唯一连接，驱动 AppHeader 角标）
+// 私信和通知实时推送：登录即建立 SSE 连接，登出即断开
 watch(
   () => authStore.isAuthenticated,
   (authed) => {
     if (authed && authStore.token) {
       messagesStore.connect(authStore.token)
+      notificationsStore.refreshUnreadCount()
     } else {
       messagesStore.disconnect()
     }

@@ -20,6 +20,7 @@ import forumPointsRouter from './forum-points.js';
 import forumUploadsRouter from './forum-uploads.js';
 import forumMessagesRouter from './forum-messages.js';
 import forumSocialRouter from './forum-social.js';
+import forumNotificationsRouter from './forum-notifications.js';
 
 const router = createForumRouter();
 
@@ -29,5 +30,6 @@ router.use(forumPointsRouter);
 router.use(forumUploadsRouter);
 router.use(forumMessagesRouter);
 router.use(forumSocialRouter);
+router.use(forumNotificationsRouter);
 
 export default router;

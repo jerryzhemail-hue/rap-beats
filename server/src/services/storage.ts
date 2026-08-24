@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import OSS from 'ali-oss';
+import type OSS from 'ali-oss';
+import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { config } from '../config.js';
 
@@ -42,6 +43,12 @@ export type DirectUploadTarget = {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, '../../data');
+
+// 延迟加载 ali-oss:该包被 import 时会在顶层执行 address.ip(),
+// 进而调用 os.networkInterfaces()。在某些受限终端/沙箱环境里,
+// os.networkInterfaces() 会抛 uv_interface_addresses 错误,
+// 导致即使 STORAGE_DRIVER=local 后端也无法启动。
+const require = createRequire(import.meta.url);
 
 const LOCAL_DIRS: Record<StorageKind, string> = {
   audio: path.join(DATA_DIR, 'audio'),
@@ -143,7 +150,9 @@ function getOssClient(): OSS {
 
   const { region, bucket, accessKeyId, accessKeySecret, endpoint, stsToken } = oss;
 
-  ossClient = new OSS({
+  // 延迟到真正使用 OSS 时才 require,避免 import 副作用导致启动失败。
+  const OSSClient = require('ali-oss') as any;
+  const client = new OSSClient({
     region,
     bucket,
     accessKeyId,
@@ -151,9 +160,10 @@ function getOssClient(): OSS {
     endpoint: endpoint || undefined,
     stsToken: stsToken || undefined,
     secure: true
-  });
+  }) as OSS;
 
-  return ossClient;
+  ossClient = client;
+  return client;
 }
 
 function createOssObjectKey(
@@ -283,6 +293,23 @@ export function resolvePublicAssetUrl(kind: StorageKind, storedValue: string | n
   if (isRemoteUrl(storedValue)) return storedValue;
   if (storedValue.startsWith('/')) return storedValue;
   return `${PUBLIC_PREFIX[kind]}/${storedValue}`;
+}
+
+/**
+ * 把客户端传回的“公开 URL / 本地路径 / 原始文件名”统一还原成数据库应存储的值。
+ * 用于编辑接口避免把 /covers/xxx.jpg 当成新值写库,进而误删刚上传的文件。
+ */
+export function normalizeStoredAssetValue(kind: StorageKind, value: string | null | undefined): string | null | undefined {
+  if (!value) return value;
+  const prefix = PUBLIC_PREFIX[kind];
+  if (value.startsWith(`${prefix}/`)) {
+    try {
+      return decodeURIComponent(value.slice(prefix.length + 1));
+    } catch {
+      return value;
+    }
+  }
+  return value;
 }
 
 export function resolveLocalAssetPath(kind: StorageKind, storedValue: string | null | undefined): string | null {

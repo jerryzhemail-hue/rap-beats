@@ -192,9 +192,8 @@ async function main() {
 
   // 5. 插入帖子
   const now = Date.now();
-  const insertPost = async (i: number, opts: { isPinned?: boolean; isEssence?: boolean } = {}) => {
+  const insertPost = async (authorId: number, i: number, opts: { isPinned?: boolean; isEssence?: boolean } = {}) => {
     const cat = cats[i % cats.length];
-    const author = users[i % users.length];
     const title = POST_TITLES[i % POST_TITLES.length];
     const content = POST_CONTENT[i % POST_CONTENT.length];
     const ageHours = i * 2; // 越靠后越新
@@ -205,7 +204,7 @@ async function main() {
         is_pinned, is_essence, status, topic_ids, images, created_at, updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        author.id, cat.id, title, content,
+        authorId, cat.id, title, content,
         Math.floor(Math.random() * 200) + 20,
         0, 0,
         opts.isPinned ? 1 : 0,
@@ -215,19 +214,31 @@ async function main() {
         createdAt, createdAt,
       ]
     );
-    return { id: r.insertId!, authorId: author.id, categoryId: cat.id, createdAt };
+    return { id: r.insertId!, authorId, categoryId: cat.id, createdAt };
   };
 
+  // ── 分配策略 ────────────────────────────────────────────────────────────────
+  // admin (index 0) 发置顶/精华帖 + 40% 的普通帖，其余用户循环填充
+  const adminId = adminUser.id;
+  const regularUsers = users.slice(1); // 除 admin 外的用户
+
   const posts: Array<{ id: number; authorId: number; categoryId: number; createdAt: string }> = [];
-  // 2 篇置顶帖 + 2 篇精华帖 + 普通帖
+
+  // 2 篇置顶帖 + 2 篇精华帖 → 全部由 admin 创建
   for (let i = 0; i < 2; i++) {
-    posts.push(await insertPost(posts.length, { isPinned: true, isEssence: i === 0 }));
+    posts.push(await insertPost(adminId, posts.length, { isPinned: true, isEssence: i === 0 }));
   }
   for (let i = 0; i < 2; i++) {
-    posts.push(await insertPost(posts.length, { isEssence: true }));
+    posts.push(await insertPost(adminId, posts.length, { isEssence: true }));
   }
-  while (posts.length < TOTAL_POSTS) {
-    posts.push(await insertPost(posts.length));
+
+  // 普通帖：admin 占 40%，其余用户轮询（仅 admin 时全由 admin 发）
+  const regularCount = TOTAL_POSTS - posts.length;
+  for (let i = 0; i < regularCount; i++) {
+    const authorId = (regularUsers.length === 0 || i % 5 < 2)
+      ? adminId
+      : regularUsers[i % regularUsers.length].id;
+    posts.push(await insertPost(authorId, posts.length));
   }
   console.log(`✅ 插入 ${posts.length} 个帖子`);
 
@@ -384,8 +395,9 @@ async function main() {
   }
   console.log(`✅ 给 ${users.length} 个用户初始化积分(100~600)`);
 
-  // 给前 8 个用户签到
-  for (let i = 0; i < 8; i++) {
+  // 给前 8 个用户签到（仅 admin 时只给 admin 签到）
+  const signInCount = Math.min(8, users.length);
+  for (let i = 0; i < signInCount; i++) {
     const u = users[i];
     const daysAgo = Math.floor(Math.random() * 7);
     await forumDb.execute(
@@ -399,68 +411,76 @@ async function main() {
       ]
     );
   }
-  console.log(`✅ 插入 8 条签到记录`);
+  console.log(`✅ 插入 1 条签到记录`);
 
   // 11. 私信会话(2 个对话)
-  // 对话 1: admin <-> users[5]
-  const convId1 = `${Math.min(adminUser.id, users[5].id)}_${Math.max(adminUser.id, users[5].id)}`;
-  await forumDb.execute(
-    `INSERT INTO forum_conversations
-     (id, participant_a, participant_b, last_message_content, last_message_at, unread_count_a, unread_count_b)
-     VALUES (?,?,?,?,?,?,?)`,
-    [convId1, adminUser.id, users[5].id, '收到,谢谢大佬!',
-     new Date(now - 3 * 3600_000).toISOString().slice(0, 19).replace('T', ' '),
-     0, 1]
-  );
-  const messages1 = [
-    { sender: users[5].id, content: '大佬在吗?问你个事' },
-    { sender: adminUser.id, content: '在的,你说' },
-    { sender: users[5].id, content: '你之前发的那个 beat 还能分享吗?' },
-    { sender: adminUser.id, content: '可以,链接发你' },
-    { sender: users[5].id, content: '收到,谢谢大佬!' },
-  ];
-  for (let i = 0; i < messages1.length; i++) {
-    const m = messages1[i];
+  let convCount = 0;
+  let msgCount = 0;
+  if (users.length >= 2) {
+    const convId1 = `${Math.min(adminUser.id, users[1].id)}_${Math.max(adminUser.id, users[1].id)}`;
     await forumDb.execute(
-      `INSERT INTO forum_messages (conversation_id, sender_id, receiver_id, content, is_read, created_at)
-       VALUES (?,?,?,?,?,?)`,
-      [convId1, m.sender,
-       m.sender === adminUser.id ? users[5].id : adminUser.id,
-       m.content, i < messages1.length - 1 ? 1 : 0,
-       new Date(now - (messages1.length - i) * 30 * 60_000).toISOString().slice(0, 19).replace('T', ' ')
-      ]
+      `INSERT INTO forum_conversations
+       (id, participant_a, participant_b, last_message_content, last_message_at, unread_count_a, unread_count_b)
+       VALUES (?,?,?,?,?,?,?)`,
+      [convId1, adminUser.id, users[1].id, '收到,谢谢大佬!',
+       new Date(now - 3 * 3600_000).toISOString().slice(0, 19).replace('T', ' '),
+       0, 1]
     );
-  }
+    const messages1 = [
+      { sender: users[1].id, content: '大佬在吗?问你个事' },
+      { sender: adminUser.id, content: '在的,你说' },
+      { sender: users[1].id, content: '你之前发的那个 beat 还能分享吗?' },
+      { sender: adminUser.id, content: '可以,链接发你' },
+      { sender: users[1].id, content: '收到,谢谢大佬!' },
+    ];
+    for (let i = 0; i < messages1.length; i++) {
+      const m = messages1[i];
+      await forumDb.execute(
+        `INSERT INTO forum_messages (conversation_id, sender_id, receiver_id, content, is_read, created_at)
+         VALUES (?,?,?,?,?,?)`,
+        [convId1, m.sender,
+         m.sender === adminUser.id ? users[1].id : adminUser.id,
+         m.content, i < messages1.length - 1 ? 1 : 0,
+         new Date(now - (messages1.length - i) * 30 * 60_000).toISOString().slice(0, 19).replace('T', ' ')
+        ]
+      );
+    }
+    convCount++;
+    msgCount += messages1.length;
 
-  // 对话 2: users[2] <-> users[8]
-  const convId2 = `${Math.min(users[2].id, users[8].id)}_${Math.max(users[2].id, users[8].id)}`;
-  await forumDb.execute(
-    `INSERT INTO forum_conversations
-     (id, participant_a, participant_b, last_message_content, last_message_at, unread_count_a, unread_count_b)
-     VALUES (?,?,?,?,?,?,?)`,
-    [convId2, users[2].id, users[8].id, '好的合作',
-     new Date(now - 24 * 3600_000).toISOString().slice(0, 19).replace('T', ' '),
-     0, 0]
-  );
-  const messages2 = [
-    { sender: users[2].id, content: '有兴趣合作一首吗?' },
-    { sender: users[8].id, content: '可以,说说想法' },
-    { sender: users[2].id, content: 'Trap 风格,你出 hook' },
-    { sender: users[8].id, content: '好的合作' },
-  ];
-  for (let i = 0; i < messages2.length; i++) {
-    const m = messages2[i];
-    await forumDb.execute(
-      `INSERT INTO forum_messages (conversation_id, sender_id, receiver_id, content, is_read, created_at)
-       VALUES (?,?,?,?,?,?)`,
-      [convId2, m.sender,
-       m.sender === users[2].id ? users[8].id : users[2].id,
-       m.content, 1,
-       new Date(now - (messages2.length - i + 6) * 30 * 60_000).toISOString().slice(0, 19).replace('T', ' ')
-      ]
-    );
+    if (users.length >= 4) {
+      const convId2 = `${Math.min(users[2].id, users[3].id)}_${Math.max(users[2].id, users[3].id)}`;
+      await forumDb.execute(
+        `INSERT INTO forum_conversations
+         (id, participant_a, participant_b, last_message_content, last_message_at, unread_count_a, unread_count_b)
+         VALUES (?,?,?,?,?,?,?)`,
+        [convId2, users[2].id, users[3].id, '好的合作',
+         new Date(now - 24 * 3600_000).toISOString().slice(0, 19).replace('T', ' '),
+         0, 0]
+      );
+      const messages2 = [
+        { sender: users[2].id, content: '有兴趣合作一首吗?' },
+        { sender: users[3].id, content: '可以,说说想法' },
+        { sender: users[2].id, content: 'Trap 风格,你出 hook' },
+        { sender: users[3].id, content: '好的合作' },
+      ];
+      for (let i = 0; i < messages2.length; i++) {
+        const m = messages2[i];
+        await forumDb.execute(
+          `INSERT INTO forum_messages (conversation_id, sender_id, receiver_id, content, is_read, created_at)
+           VALUES (?,?,?,?,?,?)`,
+          [convId2, m.sender,
+           m.sender === users[2].id ? users[3].id : users[2].id,
+           m.content, 1,
+           new Date(now - (messages2.length - i + 6) * 30 * 60_000).toISOString().slice(0, 19).replace('T', ' ')
+          ]
+        );
+      }
+      convCount++;
+      msgCount += messages2.length;
+    }
   }
-  console.log(`✅ 插入 2 个对话,共 ${messages1.length + messages2.length} 条私信`);
+  console.log(`✅ 插入 ${convCount} 个对话,共 ${msgCount} 条私信`);
 
   console.log('\n🎉 论坛数据种子完成!');
   console.log(`   帖子: ${posts.length}`);
@@ -468,9 +488,9 @@ async function main() {
   console.log(`   点赞: ${totalLikes}`);
   console.log(`   收藏: ${totalFavs}`);
   console.log(`   关注: ${totalFollows}`);
-  console.log(`   签到: 8`);
+  console.log(`   签到: ${signInCount}`);
   console.log(`   积分用户: ${users.length}`);
-  console.log(`   私信: ${messages1.length + messages2.length} 条 (2 个对话)`);
+  console.log(`   私信: ${msgCount} 条 (${convCount} 个对话)`);
 
   process.exit(0);
 }

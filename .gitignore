@@ -74,3 +74,6 @@ backups/
 
 # Server misc backup/scratch (not for version control)
 server/.backup/
+
+# 监控服务运行时状态（不随版本控制）
+monitor/state.json

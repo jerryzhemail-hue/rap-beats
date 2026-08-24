@@ -80,10 +80,10 @@ router.post('/forum/messages/conversations', requireAuth, async (req: AuthReques
   }
 
   // 检查拉黑关系
-  const blockCheck = await mainDb.queryOne<{ blocked_by_me: number; blocked_me: number }>(
+  const blockCheck = await db.queryOne<{ blocked_by_me: number; blocked_me: number }>(
     `SELECT
-       (SELECT 1 FROM user_blocks WHERE blocker_id = ? AND blocked_id = ? LIMIT 1) AS blocked_by_me,
-       (SELECT 1 FROM user_blocks WHERE blocker_id = ? AND blocked_id = ? LIMIT 1) AS blocked_me`,
+       (SELECT 1 FROM forum_blocks WHERE user_id = ? AND blocked_user_id = ? LIMIT 1) AS blocked_by_me,
+       (SELECT 1 FROM forum_blocks WHERE user_id = ? AND blocked_user_id = ? LIMIT 1) AS blocked_me`,
     [currentUserId, receiver_id, receiver_id, currentUserId]
   );
 

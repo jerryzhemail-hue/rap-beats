@@ -3,6 +3,7 @@ import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useMessagesStore } from '@/stores/messages'
+import { useNotificationsStore } from '@/stores/notifications'
 import { resolveAvatarUrl } from '@/utils/assets'
 import AuthPromptModal from './AuthPromptModal.vue'
 
@@ -14,11 +15,14 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const messagesStore = useMessagesStore()
+const notificationsStore = useNotificationsStore()
 const showAuthPrompt = ref(false)
 const showThemePicker = ref(false)
 
-// 未读私信数：由全局 SSE store 单点维护，不再各自轮询
+// 未读私信数：由全局 SSE store 单点维护
 const unreadMessageCount = computed(() => messagesStore.unreadCount)
+// 未读通知数
+const unreadNotificationCount = computed(() => notificationsStore.unreadCount)
 
 const themes = [
   { id: 'dark', name: '深色', icon: '🌙' },
@@ -140,6 +144,14 @@ function closeUserMenu() { showUserMenu.value = false }
             </svg>
             <span v-if="unreadMessageCount > 0" class="unread-dot" aria-label="未读消息">
               {{ unreadMessageCount > 99 ? '99+' : unreadMessageCount }}
+            </span>
+          </RouterLink>
+          <RouterLink to="/forum/notifications" class="notification-btn" :title="'通知'" aria-label="通知">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path fill="currentColor" d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
+            </svg>
+            <span v-if="unreadNotificationCount > 0" class="unread-dot notification-dot" aria-label="未读通知">
+              {{ unreadNotificationCount > 99 ? '99+' : unreadNotificationCount }}
             </span>
           </RouterLink>
           <div class="user-menu-wrap">
@@ -400,6 +412,31 @@ function closeUserMenu() { showUserMenu.value = false }
   border-color: var(--accent, #6366f1);
   color: var(--accent, #6366f1);
   background: rgba(99, 102, 241, 0.1);
+}
+
+.notification-btn {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-primary, #e8e8ed);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+.notification-btn:hover {
+  border-color: var(--accent, #6366f1);
+  color: var(--accent, #6366f1);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.notification-dot {
+  background: #f59e0b;
 }
 
 .unread-dot {

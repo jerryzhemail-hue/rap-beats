@@ -91,6 +91,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/forum/notifications',
+      name: 'ForumNotifications',
+      component: () => import('../views/NotificationsView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/forum/user/:userId',
       name: 'ForumUser',
       component: () => import('../views/ForumUserView.vue'),

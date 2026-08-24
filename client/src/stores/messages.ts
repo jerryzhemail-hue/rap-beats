@@ -5,6 +5,7 @@ import {
   markConversationRead,
   type ForumMessage,
 } from '@/api/forum'
+import { useNotificationsStore } from './notifications'
 
 /**
  * 服务端推送的实时消息事件载荷
@@ -15,6 +16,22 @@ export interface IncomingMessagePayload {
   sender_username?: string
   sender_avatar?: string
   message: ForumMessage
+}
+
+/**
+ * 服务端推送的实时通知事件载荷
+ */
+export interface IncomingNotificationPayload {
+  id: number
+  type: 'like_post' | 'like_comment' | 'comment' | 'follow' | 'system'
+  actor_id: number
+  actor_username?: string
+  actor_avatar?: string
+  target_type?: string
+  target_id?: number
+  target_title?: string
+  message: string
+  created_at: string
 }
 
 type MessageListener = (payload: IncomingMessagePayload) => void
@@ -116,12 +133,24 @@ export const useMessagesStore = defineStore('messages', () => {
       // 静默确认
     })
 
+    // 监听私信消息事件
     eventSource.addEventListener('message', (e: MessageEvent) => {
-      // 再次检查实例 ID，丢弃 HMR 后的过期事件
       if (storeInstanceId !== instanceId) return
       try {
         const payload = JSON.parse(e.data) as IncomingMessagePayload
         handleIncomingMessage(payload)
+      } catch {
+        // 忽略无法解析的事件数据
+      }
+    })
+
+    // 监听通知事件
+    eventSource.addEventListener('notification', (e: MessageEvent) => {
+      if (storeInstanceId !== instanceId) return
+      try {
+        const payload = JSON.parse(e.data) as IncomingNotificationPayload
+        const notificationsStore = useNotificationsStore()
+        notificationsStore.handleIncomingNotification(payload)
       } catch {
         // 忽略无法解析的事件数据
       }

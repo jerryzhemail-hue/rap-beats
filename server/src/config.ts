@@ -142,11 +142,11 @@ function isProductionLike(env: AppConfig['env']): boolean {
   return env === 'production';
 }
 
-// 生产环境禁止的 DB 名后缀(防止误连线上库)
+// 防止生产环境误用本地开发库:生产环境下出现 _dev 后缀库名时给出警告
 function isProductionForbiddenDb(name: string, env: AppConfig['env']): boolean {
   if (!isProductionLike(env)) return false;
-  // 假设生产库名是 rap_beats / rap_beats_forum,本地是 <underscore>dev 后缀
-  return name === 'rap_beats' || name === 'rap_beats_forum' || name === 'rap_beats_membership';
+  // 本地开发库统一使用 _dev 后缀,生产环境不应出现这些库名
+  return name === 'rap_beats_dev' || name === 'rap_beats_forum_dev' || name === 'rap_beats_membership_dev';
 }
 
 // 主配置加载 ──────────────────────────────────────────────────────────────

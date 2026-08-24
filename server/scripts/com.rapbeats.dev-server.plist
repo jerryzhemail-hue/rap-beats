@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rapbeats.dev-server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd /Users/wangzhe/Documents/work/rap-beats/server &amp;&amp; exec /usr/local/bin/node --import tsx/esm src/index.ts</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/wangzhe/Documents/work/rap-beats/server</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/rap-beats-server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/rap-beats-server.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NODE_ENV</key>
+        <string>development</string>
+    </dict>
+</dict>
+</plist>
