@@ -19,6 +19,9 @@ import bannersRouter from './routes/banners.js';
 import previewRouter from './routes/preview.js';
 import forumRouter from './routes/forum.js';
 import feedbackRouter from './routes/feedback.js';
+import beatmakerRouter from './routes/beatmaker.js';
+import adminBeatmakerRouter from './routes/admin-beatmaker.js';
+import homeFooterRouter from './routes/home-footer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,16 +91,19 @@ async function startServer() {
   app.use('/api', beatsRouter);
   app.use('/api/rappers', rappersRouter);
   app.use('/api/auth', authRouter);
+  app.use('/api/beatmaker', beatmakerRouter);
   app.use('/api', uploadRouter);
   app.use('/api', favoritesRouter);
   app.use('/api', commentsRouter);
   app.use('/api', userRouter);
   app.use('/api', adminRouter);
+  app.use('/api/admin/beatmaker-applications', adminBeatmakerRouter);
   app.use('/api', paymentRouter);
   app.use('/api', bannersRouter);
   app.use('/api', previewRouter);
   app.use('/api', forumRouter);
   app.use('/api', feedbackRouter);
+  app.use('/api', homeFooterRouter);
 
   // Multer 文件校验错误 → 400（必须注册在 500 兜底之前）
   app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
