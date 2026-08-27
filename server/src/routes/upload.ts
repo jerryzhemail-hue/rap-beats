@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { requireAdmin, AuthRequest } from '../middleware/auth.js';
+import { AuthRequest } from '../middleware/auth.js';
+import { requireUploader } from '../middleware/beatmaker.js';
 import { getDatabaseClient } from '../database/client.js';
 import { createDirectUploadTarget, saveBuffer, saveText, supportsDirectUpload } from '../services/storage.js';
 import { serializeBeatAssets } from '../utils/assets.js';
@@ -202,7 +203,7 @@ async function createBeatRecord(
 
 // POST /api/beats/upload-targets
 // OSS 模式下为音频/封面签发直传地址
-router.post('/beats/upload-targets', requireAdmin, (req: AuthRequest, res) => {
+router.post('/beats/upload-targets', requireUploader, (req: AuthRequest, res) => {
   if (!supportsDirectUpload()) {
     return res.json({ direct_upload: false });
   }
@@ -235,9 +236,9 @@ router.post('/beats/upload-targets', requireAdmin, (req: AuthRequest, res) => {
 });
 
 // POST /api/beats/upload
-// 需要登录
+// 需要 Beatmaker 原创制作人认证或管理员身份
 // multipart/form-data: audio(必须), cover(可选), title, producer, genre, bpm, tags(逗号分隔), is_free, duration
-router.post('/beats/upload', requireAdmin, upload.fields([
+router.post('/beats/upload', requireUploader, upload.fields([
   { name: 'audio', maxCount: 1 },
   { name: 'cover', maxCount: 1 }
 ]), async (req: AuthRequest, res) => {
@@ -330,7 +331,7 @@ router.post('/beats/upload', requireAdmin, upload.fields([
 
 // POST /api/beats/upload-direct
 // 直传 OSS 后写入业务数据
-router.post('/beats/upload-direct', requireAdmin, async (req: AuthRequest, res) => {
+router.post('/beats/upload-direct', requireUploader, async (req: AuthRequest, res) => {
   const database = getDatabaseClient();
   try {
     const { title, producer, rapper, genre, bpm, key, tags, is_free, duration, audio_file_path, cover_image } = req.body as BeatUploadPayload & {
@@ -442,7 +443,7 @@ const bpmUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }
 });
-router.post('/beats/detect-bpm', requireAdmin, bpmUpload.single('audio'), async (req: AuthRequest, res) => {
+router.post('/beats/detect-bpm', requireUploader, bpmUpload.single('audio'), async (req: AuthRequest, res) => {
   if (!req.file) {
     return res.status(400).json({ error: '请上传音频文件' });
   }
