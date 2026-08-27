@@ -11,6 +11,24 @@ export interface HomePublicResponse {
   latest: BeatsResponse
   popular: BeatsResponse
   free: BeatsResponse
+  rappers: Array<{
+    id: number
+    name: string
+    avatar_url: string | null
+    bio: string | null
+    beat_count: number
+  }>
+  tags: Array<{ tag: string; count: number }>
+  forumPosts: Array<{
+    id: number
+    title: string
+    view_count: number
+    reply_count: number
+    like_count: number
+    created_at: string
+    username: string
+    author_avatar: string | null
+  }>
 }
 
 export async function fetchHomePublicData(): Promise<HomePublicResponse> {
@@ -29,6 +47,7 @@ export async function fetchBeats(params: BeatsFilters & { page?: number; limit?:
   if (params.search) searchParams.set('search', params.search)
   if (params.sort) searchParams.set('sort', params.sort)
   if (params.is_free !== undefined) searchParams.set('is_free', String(params.is_free))
+  if (params.tag) searchParams.set('tag', params.tag)
 
   const query = searchParams.toString()
   const url = `/api/beats${query ? `?${query}` : ''}`
@@ -46,11 +65,6 @@ export async function fetchPopularBeats(): Promise<BeatsResponse> {
 
 export async function fetchFreeBeats(): Promise<BeatsResponse> {
   return fetchBeats({ is_free: 1, limit: 6 })
-}
-
-export async function fetchGenres(): Promise<string[]> {
-  const data = await request<{ genres: string[] }>('/api/genres')
-  return data.genres
 }
 
 export async function recordPlayEvent(id: number) {

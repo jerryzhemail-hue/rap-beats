@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useBeatsStore } from '@/stores/beats'
 import { fetchRappers } from '@/api/rappers'
+import { genreCategoryOptions } from '@/constants/genres'
 
 const beatsStore = useBeatsStore()
 const BPM_MIN = 40
@@ -11,21 +12,33 @@ const bpmMax = ref<number | undefined>(beatsStore.filters.bpm_max)
 const selectedRapper = ref(beatsStore.filters.rapper || '')
 const selectedKey = ref(beatsStore.filters.key || '')
 const selectedSort = ref(beatsStore.filters.sort || '')
+const selectedGenre = ref(beatsStore.filters.genre || '')
 const isFree = ref(beatsStore.filters.is_free === 1)
 
 // Rappers list
 const rappers = ref<{ id: number; name: string; count: number }[]>([])
 const loadingRappers = ref(false)
 
+// Genres list — 取自本地分类常量
+const genres = ref<string[]>(
+  genreCategoryOptions.flatMap((cat) => cat.children.map((child) => child.value))
+)
+const loadingGenres = ref(false)
+
 onMounted(async () => {
   loadingRappers.value = true
   try {
-    rappers.value = await fetchRappers()
+    const list = await fetchRappers()
+    rappers.value = list || []
   } catch (err) {
     console.error('Failed to load rappers:', err)
   } finally {
     loadingRappers.value = false
   }
+})
+
+watch(() => beatsStore.filters.genre, (newGenre) => {
+  selectedGenre.value = newGenre || ''
 })
 
 const keyOptions = ['Am', 'Cm', 'Em', 'Gm', 'Dm', 'Fm', 'Bm', 'C', 'D', 'E', 'F', 'G', 'A', 'B']
@@ -74,10 +87,16 @@ function onFreeChange() {
   beatsStore.loadBeats()
 }
 
+function onGenreChange() {
+  beatsStore.setFilter('genre', selectedGenre.value || undefined)
+  beatsStore.loadBeats()
+}
+
 function onReset() {
   selectedRapper.value = ''
   selectedKey.value = ''
   selectedSort.value = ''
+  selectedGenre.value = ''
   isFree.value = false
   bpmMin.value = undefined
   bpmMax.value = undefined
@@ -100,6 +119,13 @@ function onReset() {
       <select v-model="selectedRapper" @change="onRapperChange" :disabled="loadingRappers">
         <option value="">全部</option>
         <option v-for="r in rappers" :key="r.name" :value="r.name">{{ r.name }}</option>
+      </select>
+    </div>
+    <div class="filter-item">
+      <label>风格</label>
+      <select v-model="selectedGenre" @change="onGenreChange" :disabled="loadingGenres">
+        <option value="">全部</option>
+        <option v-for="g in genres" :key="g" :value="g">{{ g }}</option>
       </select>
     </div>
     <div class="filter-item">

@@ -16,6 +16,7 @@ const pageTitle = computed(() => {
   if (route.path === '/admin/forum') return '论坛管理'
   if (route.path === '/admin/feedback') return '意见反馈'
   if (route.path === '/admin/license') return '使用协议'
+  if (route.path === '/admin/home-footer') return '首页尾部'
   return '管理后台'
 })
 </script>
@@ -63,6 +64,10 @@ const pageTitle = computed(() => {
         <router-link to="/admin/license" class="nav-item" :class="{ active: route.path === '/admin/license' }">
           <span class="nav-icon">📋</span>
           使用协议
+        </router-link>
+        <router-link to="/admin/home-footer" class="nav-item" :class="{ active: route.path === '/admin/home-footer' }">
+          <span class="nav-icon">🧩</span>
+          首页尾部
         </router-link>
       </nav>
       <div class="admin-footer">

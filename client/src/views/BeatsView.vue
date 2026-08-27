@@ -74,6 +74,9 @@ onMounted(async () => {
   if (route.query.is_free === '1') {
     beatsStore.setFilter('is_free', 1)
   }
+  if (route.query.tag) {
+    beatsStore.setFilter('tag', route.query.tag as string)
+  }
   beatsStore.loadBeats()
   await loadRappers()
 })
@@ -99,6 +102,10 @@ watch(() => route.query, (query) => {
       beatsStore.setFilter('is_free', newIsFree)
       changed = true
     }
+  }
+  if (query.tag && query.tag !== beatsStore.filters.tag) {
+    beatsStore.setFilter('tag', query.tag as string)
+    changed = true
   }
   if (changed) beatsStore.loadBeats()
 })

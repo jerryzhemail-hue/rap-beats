@@ -2,41 +2,44 @@
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBeatsStore } from '@/stores/beats'
-import { fetchHomePublicData } from '@/api/beats'
-import { fetchHomeBanners } from '@/api/banners'
+import { useAuthStore } from '@/stores/auth'
 import {
-  defaultGenreCategoryValue,
-  genreCategoryOptions,
-  getGenreChildrenByCategory
-} from '@/constants/genres'
+  fetchHomePublicData
+} from '@/api/beats'
+import { fetchHomeBanners } from '@/api/banners'
 import SearchBar from '@/components/SearchBar.vue'
 import BeatCard from '@/components/BeatCard.vue'
+import HomeFooter from '@/components/HomeFooter.vue'
 import type { Beat, Banner } from '@/types'
+
+function formatDate(dateStr: string): string {
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+  const days = Math.floor(diff / 86400000)
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  if (hours < 24) return `${hours} 小时前`
+  if (days < 7) return `${days} 天前`
+  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+}
 
 const router = useRouter()
 const beatsStore = useBeatsStore()
+const authStore = useAuthStore()
 
 const latestBeats = ref<Beat[]>([])
 const popularBeats = ref<Beat[]>([])
 const freeBeats = ref<Beat[]>([])
 const banners = ref<Banner[]>([])
+const rappers = ref<HomePublicResponse['rappers']>([])
+const tags = ref<HomePublicResponse['tags']>([])
+const forumPosts = ref<HomePublicResponse['forumPosts']>([])
 const currentBannerIndex = ref(0)
 const isHeroHovered = ref(false)
-const selectedGenreCategory = ref(defaultGenreCategoryValue)
-const showAllHomeGenres = ref(false)
 let bannerTimer: number | null = null
-
-const homeGenreChildren = computed(() => getGenreChildrenByCategory(selectedGenreCategory.value))
-const homeVisibleGenres = computed(() => {
-  if (showAllHomeGenres.value) return homeGenreChildren.value
-  return homeGenreChildren.value.slice(0, 6)
-})
-const homeHasMoreGenres = computed(() => homeGenreChildren.value.length > 6)
-const homeGenreSummary = computed(() => {
-  const currentCategory = genreCategoryOptions.find((item) => item.value === selectedGenreCategory.value)
-  if (!currentCategory) return ''
-  return currentCategory.children.slice(0, 3).map((item) => item.label).join(' / ')
-})
 
 function clearBannerTimer() {
   if (bannerTimer !== null) {
@@ -87,6 +90,8 @@ function resumeBannerAutoplay() {
   scheduleNextBanner()
 }
 
+// ── 原有事件 ────────────────────────────────────────────────────
+
 onMounted(async () => {
   const [homeRes, bannersRes] = await Promise.allSettled([
     fetchHomePublicData(),
@@ -97,6 +102,9 @@ onMounted(async () => {
     latestBeats.value = homeRes.value.latest.beats
     popularBeats.value = homeRes.value.popular.beats
     freeBeats.value = homeRes.value.free.beats
+    rappers.value = homeRes.value.rappers || []
+    tags.value = homeRes.value.tags || []
+    forumPosts.value = homeRes.value.forumPosts || []
   } else {
     console.error('Failed to load home data:', homeRes.reason)
   }
@@ -112,10 +120,6 @@ watch([banners, currentBannerIndex, isHeroHovered], () => {
   scheduleNextBanner()
 })
 
-watch(selectedGenreCategory, () => {
-  showAllHomeGenres.value = false
-})
-
 onUnmounted(() => {
   clearBannerTimer()
 })
@@ -128,6 +132,18 @@ function onSearch(query: string) {
 function onGenreClick(genre: string) {
   beatsStore.setFilter('genre', genre)
   router.push('/beats')
+}
+
+function onRapperClick(rapperId: number) {
+  router.push(`/rapper/${rapperId}`)
+}
+
+function onTagClick(tag: string) {
+  router.push({ path: '/beats', query: { tag } })
+}
+
+function onForumPostClick(postId: number) {
+  router.push(`/forum/post/${postId}`)
 }
 </script>
 
@@ -185,6 +201,18 @@ function onGenreClick(genre: string) {
       </div>
     </section>
 
+    <!-- VIP 会员引导 Banner（未登录或非会员可见） -->
+    <section v-if="!authStore.isVip" class="section">
+      <router-link to="/vip" class="vip-banner">
+        <div class="vip-banner-content">
+          <span class="vip-banner-tag">💜 升级会员</span>
+          <h3 class="vip-banner-title">解锁全部高品质伴奏 &amp; 无限下载</h3>
+          <p class="vip-banner-desc">开通高级会员，畅享 VIP 专属内容与每日无限下载次数</p>
+        </div>
+        <div class="vip-banner-cta">立即开通 →</div>
+      </router-link>
+    </section>
+
     <section class="section">
       <div class="section-header">
         <h2 class="section-title">最新伴奏</h2>
@@ -228,47 +256,112 @@ function onGenreClick(genre: string) {
       </div>
     </section>
 
-    <section class="section">
-      <div class="section-header genre-section-header">
-        <div>
-          <h2 class="section-title">风格分类</h2>
-          <p class="section-subtitle">先切换一级风格，再选择你想浏览的细分风格。</p>
-          <p class="genre-category-summary">当前分类示例：{{ homeGenreSummary }}</p>
-        </div>
+    <!-- 热门标签 -->
+    <section v-if="tags.length > 0" class="section">
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+            <line x1="7" y1="7" x2="7.01" y2="7"/>
+          </svg>
+          热门标签
+        </h2>
       </div>
-      <div class="genre-category-tabs">
+      <div class="tag-cloud">
         <button
-          v-for="category in genreCategoryOptions"
-          :key="category.value"
-          class="genre-category-tab"
-          :class="{ active: category.value === selectedGenreCategory }"
-          @click="selectedGenreCategory = category.value"
+          v-for="{ tag, count } in tags"
+          :key="tag"
+          class="tag-chip"
+          @click="onTagClick(tag)"
         >
-          {{ category.label }}
-        </button>
-      </div>
-      <div class="genre-tags">
-        <button
-          v-for="genre in homeVisibleGenres"
-          :key="genre.value"
-          class="genre-chip"
-          @click="onGenreClick(genre.value)"
-        >
-          {{ genre.label }}
-        </button>
-      </div>
-      <div v-if="homeHasMoreGenres" class="genre-more">
-        <button class="genre-more-btn" @click="showAllHomeGenres = !showAllHomeGenres">
-          {{ showAllHomeGenres ? '收起' : '查看更多' }}
+          {{ tag }}
+          <span class="tag-count">{{ count }}</span>
         </button>
       </div>
     </section>
+
+    <!-- 人气 Rapper -->
+    <section v-if="rappers.length > 0" class="section">
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          人气 Rapper
+        </h2>
+        <router-link to="/beats" class="view-all">全部 →</router-link>
+      </div>
+      <div class="rapper-row">
+        <div
+          v-for="rapper in rappers"
+          :key="rapper.id"
+          class="rapper-card"
+          @click="onRapperClick(rapper.id)"
+        >
+          <div class="rapper-avatar">
+            <img v-if="rapper.avatar_url" :src="rapper.avatar_url" :alt="rapper.name" />
+            <span v-else class="avatar-placeholder">{{rapper.name.charAt(0).toUpperCase()}}</span>
+          </div>
+          <div class="rapper-info">
+            <span class="rapper-name">{{rapper.name}}</span>
+            <span class="rapper-count">{{rapper.beat_count}} 首</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 社区动态 -->
+    <section v-if="forumPosts.length > 0" class="section">
+      <div class="section-header">
+        <h2 class="section-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          社区动态
+        </h2>
+        <router-link to="/forum" class="view-all">更多 →</router-link>
+      </div>
+      <div class="forum-posts-list">
+        <div
+          v-for="post in forumPosts"
+          :key="post.id"
+          class="forum-post-item"
+          @click="onForumPostClick(post.id)"
+        >
+          <div class="post-meta">
+            <span class="post-author">{{ post.username }}</span>
+            <span class="post-time">{{ formatDate(post.created_at) }}</span>
+          </div>
+          <h3 class="post-title">{{ post.title }}</h3>
+          <div class="post-stats">
+            <span class="stat">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              {{ post.view_count }}
+            </span>
+            <span class="stat">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              {{ post.reply_count }}
+            </span>
+            <span class="stat">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+              {{ post.like_count }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </div>
+
+  <HomeFooter />
 </template>
 
 <style scoped>
 .home {
-  padding-bottom: 40px;
+  padding-bottom: 0;
 }
 
 .hero {
@@ -432,12 +525,6 @@ function onGenreClick(genre: string) {
   font-size: 14px;
 }
 
-.genre-category-summary {
-  margin: 8px 0 0;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 13px;
-}
-
 .view-all {
   font-size: 14px;
   color: var(--accent);
@@ -454,80 +541,254 @@ function onGenreClick(genre: string) {
   gap: 20px;
 }
 
-.genre-tags {
+/* VIP Banner */
+.vip-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 28px;
+  background: linear-gradient(135deg, #1a0533 0%, #2d1060 50%, #1a0533 100%);
+  border: 1px solid rgba(124, 58, 237, 0.45);
+  border-radius: var(--radius);
+  text-decoration: none;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.vip-banner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 70% 50%, rgba(124, 58, 237, 0.18) 0%, transparent 65%);
+  pointer-events: none;
+}
+
+.vip-banner:hover {
+  border-color: rgba(124, 58, 237, 0.7);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 32px rgba(124, 58, 237, 0.28);
+}
+
+.vip-banner-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vip-banner-tag {
+  font-size: 12px;
+  font-weight: 700;
+  color: #c4b5fd;
+  letter-spacing: 0.5px;
+}
+
+.vip-banner-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+}
+
+.vip-banner-desc {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0;
+}
+
+.vip-banner-cta {
+  flex-shrink: 0;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, #7c3aed, #a855f7);
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  transition: transform 0.2s ease;
+}
+
+.vip-banner:hover .vip-banner-cta {
+  transform: scale(1.04);
+}
+
+/* Tag cloud */
+.tag-cloud {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px;
 }
 
-.genre-category-tabs {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 12px;
-  margin-bottom: 16px;
-  overflow-x: auto;
-  padding-bottom: 6px;
-  scrollbar-width: thin;
-}
-
-.genre-category-tab {
-  flex: 0 0 auto;
-  padding: 10px 18px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.genre-category-tab:hover,
-.genre-category-tab.active {
-  border-color: var(--accent);
-  background: rgba(124, 58, 237, 0.16);
-  color: var(--text-primary);
-}
-
-.genre-chip {
-  padding: 10px 24px;
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
-.genre-chip:hover {
+.tag-chip:hover {
   border-color: var(--accent);
   background: var(--accent-light);
   color: var(--accent);
 }
 
-.genre-more {
-  margin-top: 16px;
+.tag-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(124, 58, 237, 0.15);
+  padding: 1px 6px;
+  border-radius: 999px;
 }
 
-.genre-more-btn {
-  padding: 10px 18px;
-  border: 1px solid rgba(124, 58, 237, 0.35);
-  border-radius: 999px;
-  background: transparent;
-  color: #c4b5fd;
-  font-size: 14px;
+/* Rapper row */
+.rapper-row {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  scrollbar-width: thin;
+}
+
+.rapper-card {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 120px;
+  text-align: center;
+}
+
+.rapper-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(99, 58, 237, 0.18);
+}
+
+.rapper-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--accent), #a855f7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.rapper-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.rapper-avatar .avatar-placeholder {
+  font-size: 24px;
+  font-weight: 700;
+  color: white;
+}
+
+.rapper-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rapper-name {
+  font-size: 13px;
   font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.rapper-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* Forum posts */
+.forum-posts-list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.forum-post-item {
+  padding: 16px 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
-.genre-more-btn:hover {
+.forum-post-item:hover {
   border-color: var(--accent);
-  background: rgba(124, 58, 237, 0.12);
-  color: #ddd6fe;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(99, 58, 237, 0.14);
+}
+
+.post-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.post-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.post-time {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.post-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 10px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.post-stats {
+  display: flex;
+  gap: 12px;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.stat svg {
+  opacity: 0.6;
 }
 
 @media (max-width: 1024px) {
@@ -577,24 +838,6 @@ function onGenreClick(genre: string) {
 
   .hero-arrow-right {
     right: 12px;
-  }
-
-  .genre-category-tabs {
-    gap: 10px;
-  }
-
-  .genre-category-tab {
-    width: auto;
-    text-align: center;
-  }
-
-  .genre-chip {
-    width: 100%;
-    text-align: center;
-  }
-
-  .genre-more-btn {
-    width: 100%;
   }
 }
 </style>

@@ -45,42 +45,6 @@ const playEventLimiter = createRateLimiter({
   message: '播放事件发送过于频繁，请稍后再试',
 });
 
-const genreAliasMap: Record<string, string[]> = {
-  '主流流行（Mainstream Pop）': ['主流流行（Mainstream Pop）', 'Pop'],
-  '流行舞曲（Dance Pop）': ['流行舞曲（Dance Pop）', 'Dance Pop'],
-  '抒情流行（Pop Ballad）': ['抒情流行（Pop Ballad）', 'Pop Ballad'],
-  '国风流行（C-Pop 国风）': ['国风流行（C-Pop 国风）', 'C-Pop'],
-  '经典摇滚（Classic Rock）': ['经典摇滚（Classic Rock）', 'Rock', 'Classic Rock'],
-  '朋克摇滚（Punk Rock）': ['朋克摇滚（Punk Rock）', 'Punk Rock'],
-  '英伦摇滚（Britpop）': ['英伦摇滚（Britpop）', 'Britpop'],
-  '民谣摇滚（Folk Rock）': ['民谣摇滚（Folk Rock）', 'Folk Rock'],
-  '老派说唱（Old School）': ['老派说唱（Old School）', 'Old School'],
-  '东岸说唱（East Coast）': ['东岸说唱（East Coast）', 'East Coast'],
-  '西岸说唱 / G-Funk': ['西岸说唱 / G-Funk', 'G-Funk'],
-  '陷阱说唱（Trap）': ['陷阱说唱（Trap）', 'Trap'],
-  '旋律说唱（Melodic Rap）': ['旋律说唱（Melodic Rap）', 'Melodic Rap'],
-  '爵士说唱（Jazz Rap）': ['爵士说唱（Jazz Rap）', 'Jazz Rap', 'Jazz'],
-  'Drill': ['Drill'],
-  'Boom Bap': ['Boom Bap', 'boombap'],
-  '经典 R&B': ['经典 R&B', 'R&B'],
-  '灵魂乐（Soul）': ['灵魂乐（Soul）', 'Soul'],
-  '新灵魂乐（Neo-Soul）': ['新灵魂乐（Neo-Soul）', 'Neo-Soul'],
-  'Trap Soul': ['Trap Soul'],
-  '放克（Funk）': ['放克（Funk）', 'Funk'],
-  '另类 R&B（Alternative R&B）': ['另类 R&B（Alternative R&B）', 'Alternative R&B'],
-  '浩室音乐（House）': ['浩室音乐（House）', 'House'],
-  '科技舞曲（Techno）': ['科技舞曲（Techno）', 'Techno'],
-  '鼓打贝斯（Drum & Bass）': ['鼓打贝斯（Drum & Bass）', 'Drum & Bass'],
-  '迷幻出神（Trance）': ['迷幻出神（Trance）', 'Trance'],
-  'Lo-Fi 电子': ['Lo-Fi 电子', 'Lo-fi', 'Lo-Fi'],
-  '商业电子舞曲（EDM）': ['商业电子舞曲（EDM）', 'EDM']
-};
-
-function getGenreAliases(genre: string): string[] {
-  const aliases = genreAliasMap[genre];
-  if (!aliases) return [genre];
-  return Array.from(new Set(aliases));
-}
 const PREVIEW_MAX_BYTES = FREE_PREVIEW_MAX_BYTES;
 const coverUpload = multer({
   storage: multer.memoryStorage(),
@@ -203,7 +167,7 @@ router.get('/beats', optionalAuth, async (req: AuthRequest, res: Response) => {
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 12));
   const offset = (page - 1) * limit;
 
-  const { genre, bpm_min, bpm_max, key, search, is_free, sort, rapper } = req.query as Record<string, string>;
+  const { genre, bpm_min, bpm_max, key, search, is_free, sort, rapper, tag } = req.query as Record<string, string>;
   const popularSince = new Date();
   popularSince.setDate(popularSince.getDate() - 7);
   const popularSinceText = toDateTimeString(popularSince);
@@ -212,9 +176,8 @@ router.get('/beats', optionalAuth, async (req: AuthRequest, res: Response) => {
   const params: unknown[] = [];
 
   if (genre) {
-    const aliases = getGenreAliases(genre);
-    conditions.push(`b.genre IN (${aliases.map(() => '?').join(', ')})`);
-    params.push(...aliases);
+    conditions.push('b.genre = ?');
+    params.push(genre);
   }
   if (rapper) {
     // 支持 rapper ID 或名字过滤
@@ -229,6 +192,11 @@ router.get('/beats', optionalAuth, async (req: AuthRequest, res: Response) => {
       conditions.push('EXISTS (SELECT 1 FROM beat_producers bp WHERE bp.beat_id = b.id AND bp.rapper_name = ?)');
       params.push(rapper);
     }
+  }
+  if (tag) {
+    // tags 是 JSON 数组，用 LIKE 模糊匹配
+    conditions.push("b.tags LIKE ?");
+    params.push(`%"${tag}"%`);
   }
   if (bpm_min) {
     conditions.push('b.bpm >= ?');
@@ -707,15 +675,7 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
   fs.createReadStream(filePath).pipe(res);
 });
 
-// GET /api/genres
-router.get('/genres', async (_req: Request, res: Response) => {
-  const database = getDatabaseClient();
-  const rows = await database.queryMany<{ genre: string }>('SELECT DISTINCT genre FROM beats ORDER BY genre ASC');
-  const genres = rows.map((r) => r.genre);
-  res.json({ genres });
-});
-
-  // GET /api/home/public - 公开首页数据，不需要登录
+// GET /api/home/public - 公开首页数据，不需要登录
 router.get('/home/public', async (_req: Request, res: Response) => {
   const database = getDatabaseClient();
 
@@ -750,6 +710,69 @@ router.get('/home/public', async (_req: Request, res: Response) => {
     LIMIT 6
   `);
 
+  // 人气 Rapper（按 sort_order 排序，取前 8 位）
+  const rappers = await database.queryMany<any>(`
+    SELECT r.id, r.name, r.avatar_url, r.bio, COUNT(bp.beat_id) AS beat_count
+    FROM rappers r
+    LEFT JOIN beat_producers bp ON bp.rapper_id = r.id
+    GROUP BY r.id, r.name, r.avatar_url, r.bio
+    ORDER BY r.sort_order ASC, beat_count DESC
+    LIMIT 8
+  `);
+
+  // 热门标签（从 beats.tags 聚合，JSON 数组字段）
+  const tagRows = await database.queryMany<{ tags: string | null }>(
+    `SELECT tags FROM beats WHERE tags IS NOT NULL AND tags != '' AND tags != '[]'`
+  );
+  const tagCount: Record<string, number> = {};
+  for (const row of tagRows) {
+    try {
+      const parsed = JSON.parse(row.tags || '[]') as string[];
+      for (const tag of parsed) {
+        const t = tag.trim();
+        if (t) tagCount[t] = (tagCount[t] || 0) + 1;
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+  const topTags = Object.entries(tagCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([tag, count]) => ({ tag, count }));
+
+  // 论坛最新帖子（先查 forum DB，再去主库取作者信息）
+  const forumDb = getForumDatabaseClient();
+  const forumPostRows = await forumDb.queryMany<any>(`
+    SELECT id, title, view_count, comment_count AS reply_count, like_count, created_at, user_id
+    FROM forum_posts
+    WHERE status = 'published'
+    ORDER BY created_at DESC
+    LIMIT 4
+  `);
+
+  // 用主库补充作者信息（复用上面的 database 句柄）
+  let forumPosts: Array<any> = [];
+  if (forumPostRows.length > 0) {
+    const userIds = [...new Set(forumPostRows.map((p: any) => p.user_id))];
+    const placeholders = userIds.map(() => '?').join(',');
+    const users = await database.queryMany<{ id: number; username: string; avatar_url: string | null }>(
+      `SELECT id, username, avatar_url FROM users WHERE id IN (${placeholders})`,
+      userIds
+    );
+    const userMap = new Map(users.map((u) => [u.id, u]));
+    forumPosts = forumPostRows.map((p: any) => ({
+      id: p.id,
+      title: p.title,
+      view_count: p.view_count,
+      reply_count: p.reply_count,
+      like_count: p.like_count,
+      created_at: p.created_at,
+      username: userMap.get(p.user_id)?.username || '匿名',
+      author_avatar: userMap.get(p.user_id)?.avatar_url || null,
+    }));
+  }
+
   // 序列化封面图片（OSS 模式下生成签名 URL）
   const serializedLatest = latestBeats.map((b: any) => serializeBeatAssets(b));
   const serializedPopular = popularBeats.map((b: any) => serializeBeatAssets(b));
@@ -758,7 +781,10 @@ router.get('/home/public', async (_req: Request, res: Response) => {
   res.json({
     latest: { beats: serializedLatest, total: serializedLatest.length },
     popular: { beats: serializedPopular, total: serializedPopular.length },
-    free: { beats: serializedFree, total: serializedFree.length }
+    free: { beats: serializedFree, total: serializedFree.length },
+    rappers,
+    tags: topTags,
+    forumPosts,
   });
 });
 
