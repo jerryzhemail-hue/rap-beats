@@ -9,10 +9,22 @@ if (!rawJwtSecret) {
 
 export const JWT_SECRET: string = rawJwtSecret;
 export interface AuthRequest extends Request {
-  user?: { id: number; username: string; email: string; role: string };
+  user?: {
+    id: number;
+    username: string;
+    email: string;
+    role: string;
+    is_beatmaker?: number;
+  };
 }
 
-type TokenPayload = { id: number; username: string; email: string; role: string };
+type TokenPayload = {
+  id: number;
+  username: string;
+  email: string;
+  role: string;
+  is_beatmaker?: number;
+};
 
 /** 从 Authorization header 或 ?token= query 参数中提取原始 JWT 字符串。 */
 function extractToken(req: Request): string | null {
@@ -28,14 +40,14 @@ function extractToken(req: Request): string | null {
 async function resolveCurrentUserFromToken(decoded: TokenPayload) {
   const database = getDatabaseClient();
   const byId = await database.queryOne<TokenPayload>(
-    'SELECT id, username, email, role FROM users WHERE id = ?',
+    'SELECT id, username, email, role, is_beatmaker FROM users WHERE id = ?',
     [decoded.id]
   );
   if (byId) return byId;
 
   // 兼容用户 ID 被重排后的旧 token，优先按邮箱回捞，再按用户名回捞。
   return database.queryOne<TokenPayload>(
-    'SELECT id, username, email, role FROM users WHERE email = ? OR username = ? LIMIT 1',
+    'SELECT id, username, email, role, is_beatmaker FROM users WHERE email = ? OR username = ? LIMIT 1',
     [decoded.email, decoded.username]
   );
 }

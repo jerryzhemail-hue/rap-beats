@@ -45,6 +45,12 @@ export async function initDatabase(
     await db.execute('CREATE INDEX idx_beats_rapper ON beats(rapper)');
   } catch (_) { /* ignore if column exists or index exists */ }
 
+  // beats.creator_role 字段：标记作品来自 admin / beatmaker / rappers_only
+  try {
+    await db.execute("ALTER TABLE beats ADD COLUMN creator_role ENUM('admin','beatmaker','rappers_only') NOT NULL DEFAULT 'admin' AFTER uploaded_by");
+    await db.execute('CREATE INDEX idx_beats_creator_role ON beats(creator_role)');
+  } catch (_) { /* ignore if column exists or index exists */ }
+
   // users 表（必须在 beats 表之前，因为 beats 有 FK 依赖 users）
   await db.execute(`
     CREATE TABLE IF NOT EXISTS users (
@@ -66,6 +72,52 @@ export async function initDatabase(
   // 确保 phone 字段存在（已有表升级时）
   try { await db.execute("ALTER TABLE users ADD COLUMN phone VARCHAR(20) NULL AFTER password_hash"); } catch (_) { /* ignore */ }
   try { await db.execute("CREATE INDEX idx_users_phone ON users(phone)"); } catch (_) { /* ignore */ }
+
+  // Beatmaker 认证字段（已有表升级时）
+  try { await db.execute("ALTER TABLE users ADD COLUMN is_beatmaker TINYINT DEFAULT 0 AFTER vip_level"); } catch (_) { /* ignore */ }
+  try { await db.execute("ALTER TABLE users ADD COLUMN beatmaker_certified_at DATETIME NULL AFTER is_beatmaker"); } catch (_) { /* ignore */ }
+  try { await db.execute("CREATE INDEX idx_users_is_beatmaker ON users(is_beatmaker)"); } catch (_) { /* ignore */ }
+
+  // Beatmaker 申请表
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS beatmaker_applications (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      real_name VARCHAR(50) NOT NULL,
+      id_card_no_enc TEXT NOT NULL,
+      portfolio_url VARCHAR(500) NULL,
+      sample_work_url VARCHAR(500) NULL,
+      bio TEXT NULL,
+      status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+      reject_reason VARCHAR(500) NULL,
+      reviewed_by INT NULL,
+      reviewed_at DATETIME NULL,
+      last_rejected_at DATETIME NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_bmapp_user_id (user_id),
+      INDEX idx_bmapp_status (status),
+      INDEX idx_bmapp_created_at (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // Beatmaker 认证通过后的资料表（1:1 with users）
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS beatmaker_profiles (
+      user_id INT PRIMARY KEY,
+      display_name VARCHAR(100) NOT NULL,
+      avatar_url TEXT NULL,
+      bio TEXT NULL,
+      portfolio_url VARCHAR(500) NULL,
+      sample_audio_url VARCHAR(500) NULL,
+      certified_at DATETIME NOT NULL,
+      total_beats INT NOT NULL DEFAULT 0,
+      total_likes INT NOT NULL DEFAULT 0,
+      total_downloads INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
 
   // beats 表
   await db.execute(`
@@ -355,6 +407,102 @@ export async function initDatabase(
       INDEX idx_banners_is_active (is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  // ─── 首页尾部内容配置 + FAQ ────────────────────────────────────────────────
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS home_footer_config (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      config_key VARCHAR(64) NOT NULL UNIQUE,
+      config_value LONGTEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS home_footer_faqs (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      category VARCHAR(50) DEFAULT '通用',
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      sort_order INT DEFAULT 0,
+      is_active TINYINT DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_home_footer_faqs_sort (sort_order)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      email VARCHAR(255) NOT NULL UNIQUE,
+      source VARCHAR(20) DEFAULT 'footer',
+      is_active TINYINT DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  const existingFooterConfig = await db.queryOne<{ id: number }>(
+    'SELECT id FROM home_footer_config WHERE config_key = ? LIMIT 1',
+    ['home_footer']
+  );
+  if (!existingFooterConfig) {
+    const defaultFooterConfig = {
+      licenseCards: [
+        { id: 'personal', icon: '🎧', title: '个人非商用', description: '下载后可用于个人练习、翻唱记录和非商业分享，请勿用于商演或流媒体发布。', ctaText: '了解限制', ctaUrl: '/vip', sortOrder: 1, isActive: true },
+        { id: 'commercial', icon: '💼', title: '商用 License', description: '流媒体发布、商演、影视与广告配乐等需单独联系制作人购买商用授权，平台不代理交易。', ctaText: '联系制作人', ctaUrl: '/forum/messages', sortOrder: 2, isActive: true },
+        { id: 'exclusive', icon: '👑', title: '独家 / 买断', description: '需要专属定制或独占使用权？与制作人私信协商独家与非独家授权。', ctaText: '私信协商', ctaUrl: '/forum/messages', sortOrder: 3, isActive: true }
+      ],
+      creatorCta: { title: '你是 Beatmaker？', subtitle: '上传你的作品，加入 Rapper 频道，让更多音乐人听见。', buttonText: '上传作品', buttonUrl: '/upload', isActive: true },
+      stats: [
+        { id: 'beats', label: '优质 Beat', value: '', auto: 'totalBeats', sortOrder: 1, isActive: true },
+        { id: 'rappers', label: '合作制作人', value: '', auto: 'totalRappers', sortOrder: 2, isActive: true },
+        { id: 'downloads', label: '累计下载', value: '', auto: 'totalDownloads', sortOrder: 3, isActive: true },
+        { id: 'users', label: '注册用户', value: '', auto: 'totalUsers', sortOrder: 4, isActive: true }
+      ],
+      links: [
+        { id: 'beats', label: '发现伴奏', url: '/beats', group: 'quick' },
+        { id: 'free', label: '免费专区', url: '/beats?is_free=1', group: 'quick' },
+        { id: 'vip', label: 'VIP 会员', url: '/vip', group: 'service' },
+        { id: 'points', label: '积分中心', url: '/points', group: 'service' },
+        { id: 'forum', label: '论坛社区', url: '/forum', group: 'community' },
+        { id: 'license', label: '使用协议', url: '/vip', group: 'support' }
+      ],
+      compliance: {
+        copyrightText: '© 2026 Rap Beats · 平台仅提供 Beat 展示、试听与下载服务，版权归制作人或合法授权方所有',
+        icp: '',
+        icpUrl: 'https://beian.miit.gov.cn/',
+        police: '',
+        policeUrl: '',
+        email: 'contact@rapbeats.example.com',
+        emailLabel: '商务合作 / 联系我们'
+      },
+      membershipSection: { isActive: true, title: '会员权益', subtitle: '选择适合你的创作节奏' },
+      rappersSection: { isActive: true, title: '热门制作人', subtitle: '跟着优秀的 Beatmaker 找到你的声音', count: 6 },
+      chartsSection: { isActive: true, title: '热门榜单', subtitle: '下载 / 收藏 / 播放实时排行', count: 5 },
+      subscribeSection: { isActive: true, title: '新 Beat 上架提醒', subtitle: '订阅后第一时间收到上新通知', buttonText: '订阅' }
+    };
+    await db.execute(
+      'INSERT INTO home_footer_config (config_key, config_value) VALUES (?, ?)',
+      ['home_footer', JSON.stringify(defaultFooterConfig)]
+    );
+  }
+
+  const existingFaqCount = await db.queryOne<{ count: number }>('SELECT COUNT(*) as count FROM home_footer_faqs');
+  if ((existingFaqCount?.count ?? 0) === 0) {
+    const defaultFaqs = [
+      { category: '授权与版权', question: '下载 Beat 后可以直接商用吗？', answer: '不可以。普通下载仅限个人非商业使用；如需商用（流媒体发布、商演、影视/广告配乐等），须联系制作人单独购买商用 License。', sort_order: 1 },
+      { category: '授权与版权', question: '如何联系 Beat 制作人？', answer: '登录后进入论坛或私信功能，搜索制作人并发起私信协商商用授权。', sort_order: 2 },
+      { category: '会员与积分', question: 'VIP 会员有什么权益？', answer: '基础、高级、至尊会员对应不同的每日下载次数、音质与专属标识，详见会员页。', sort_order: 3 },
+      { category: '会员与积分', question: '积分有什么用？', answer: '积分可用于签到、抽奖和兑换下载权限，详见积分中心。', sort_order: 4 }
+    ];
+    for (const faq of defaultFaqs) {
+      await db.execute(
+        'INSERT INTO home_footer_faqs (category, question, answer, sort_order, is_active) VALUES (?, ?, ?, ?, 1)',
+        [faq.category, faq.question, faq.answer, faq.sort_order]
+      );
+    }
+  }
 
   // ─── 论坛数据库初始化 ───────────────────────────────────────────────────────
   await initForumDatabase(forumDb);

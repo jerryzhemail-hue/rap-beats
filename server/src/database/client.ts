@@ -17,6 +17,7 @@ export interface DatabaseClient {
   queryMany<T>(sql: string, params?: SqlParams): Promise<T[]>;
   execute(sql: string, params?: SqlParams): Promise<ExecuteResult>;
   transaction<T>(handler: (client: DatabaseClient) => Promise<T>): Promise<T>;
+  close?(): Promise<void>;
 }
 
 let mainDatabaseClient: DatabaseClient | null = null;
@@ -93,6 +94,10 @@ class MySqlDatabaseClient implements DatabaseClient {
     } finally {
       connection.release();
     }
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
   }
 }
 
