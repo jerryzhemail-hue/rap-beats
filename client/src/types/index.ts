@@ -39,6 +39,7 @@ export interface BeatsFilters {
   search?: string
   is_free?: number
   sort?: string
+  tag?: string
 }
 
 export type VipLevel = 'free' | 'basic' | 'premium' | 'ultimate'
@@ -52,6 +53,7 @@ export interface User {
   vip_expire_at?: string | null
   avatar_url?: string | null
   created_at?: string
+  is_beatmaker?: number
 }
 
 export interface VipStatus {

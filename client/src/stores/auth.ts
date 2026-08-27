@@ -12,6 +12,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => !!token.value && !!user.value)
   const isAdmin = computed(() => user.value?.role === 'admin')
+  const isBeatmaker = computed(() => user.value?.is_beatmaker === 1)
+  const canUpload = computed(() => isAdmin.value || isBeatmaker.value)
   const vipLevel = computed<VipLevel>(() => user.value?.vip_level || 'free')
   const isVip = computed(() => vipLevel.value !== 'free')
   const isPremiumOrAbove = computed(() => vipLevel.value === 'premium' || vipLevel.value === 'ultimate')
@@ -84,6 +86,8 @@ export const useAuthStore = defineStore('auth', () => {
     token,
     isAuthenticated,
     isAdmin,
+    isBeatmaker,
+    canUpload,
     isVip,
     vipLevel,
     isPremiumOrAbove,

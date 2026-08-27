@@ -18,7 +18,7 @@ const router = createRouter({
       path: '/upload',
       name: 'Upload',
       component: () => import('../views/UploadView.vue'),
-      meta: { requiresAuth: true, requiresAdmin: true }
+      meta: { requiresAuth: true, requiresUploader: true }
     },
     {
       path: '/profile',
@@ -57,7 +57,9 @@ const router = createRouter({
         { path: 'banners', name: 'AdminBanners', component: () => import('../views/admin/BannersView.vue') },
         { path: 'forum', name: 'AdminForum', component: () => import('../views/admin/ForumManageView.vue') },
         { path: 'feedback', name: 'AdminFeedback', component: () => import('../views/admin/FeedbackView.vue') },
-        { path: 'license', name: 'AdminLicense', component: () => import('../views/admin/LicenseView.vue') }
+        { path: 'license', name: 'AdminLicense', component: () => import('../views/admin/LicenseView.vue') },
+        { path: 'home-footer', name: 'AdminHomeFooter', component: () => import('../views/admin/HomeFooterManageView.vue') },
+        { path: 'beatmaker-approvals', name: 'AdminBeatmakerApprovals', component: () => import('../views/admin/BeatmakerApprovalsView.vue') }
       ]
     },
     {
@@ -113,6 +115,24 @@ const router = createRouter({
       name: 'ForumChat',
       component: () => import('../views/MessagesHubView.vue'),
       meta: { requiresAuth: true }
+    },
+    {
+      path: '/beatmaker/apply',
+      name: 'BeatmakerApply',
+      component: () => import('../views/BeatmakerApplyView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/beatmakers',
+      name: 'BeatmakerList',
+      component: () => import('../views/BeatmakerListView.vue'),
+      meta: { public: true }
+    },
+    {
+      path: '/beatmaker/profile/:userId',
+      name: 'BeatmakerProfile',
+      component: () => import('../views/BeatmakerProfileView.vue'),
+      meta: { public: true }
     }
   ],
   scrollBehavior() {
@@ -129,6 +149,10 @@ router.beforeEach((to) => {
 
   if (to.meta.requiresAdmin && !authStore.isAdmin) {
     return { path: '/' }
+  }
+
+  if (to.meta.requiresUploader && !authStore.canUpload) {
+    return { path: '/beatmaker/apply', query: { redirect: to.fullPath } }
   }
 
   if (to.meta.guest && authStore.isAuthenticated) {

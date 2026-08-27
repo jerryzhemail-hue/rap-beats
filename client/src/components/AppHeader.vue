@@ -117,6 +117,8 @@ function closeUserMenu() { showUserMenu.value = false }
         <RouterLink v-else to="/beats" :class="{ active: route.path.startsWith('/beats') }">伴奏库</RouterLink>
         <RouterLink to="/forum" :class="{ active: route.path.startsWith('/forum') }">论坛</RouterLink>
         <RouterLink v-if="authStore.isAuthenticated && authStore.isAdmin" to="/upload" :class="{ active: route.path === '/upload' }">上传</RouterLink>
+        <RouterLink v-if="authStore.isAuthenticated && authStore.canUpload && !authStore.isAdmin" to="/upload" :class="{ active: route.path === '/upload' }">上传</RouterLink>
+        <RouterLink to="/beatmakers" :class="{ active: route.path.startsWith('/beatmaker') }">认证 Beatmaker</RouterLink>
         <RouterLink v-if="authStore.isAdmin" to="/admin" :class="{ active: route.path.startsWith('/admin') }">管理后台</RouterLink>
       </nav>
       <div class="header-auth">
