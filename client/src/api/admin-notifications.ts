@@ -1,7 +1,4 @@
-/**
- * 管理员通知 API
- */
-import apiClient from './client.js';
+import { request } from './request';
 
 export interface AdminNotification {
   id: number;
@@ -14,27 +11,25 @@ export interface AdminNotification {
 }
 
 export async function fetchAdminNotifications(): Promise<{ notifications: AdminNotification[] }> {
-  const res = await apiClient.get<{ notifications: AdminNotification[] }>('/admin/notifications');
-  return res.data;
+  return request('/api/admin/notifications', { method: 'GET' });
 }
 
 export async function fetchAdminUnreadCount(): Promise<{ unreadCount: number }> {
-  const res = await apiClient.get<{ unreadCount: number }>('/admin/notifications/unread');
-  return res.data;
+  return request('/api/admin/notifications/unread', { method: 'GET' });
 }
 
-export async function markAdminNotificationRead(id: number): Promise<void> {
-  await apiClient.patch(`/admin/notifications/${id}/read`);
+export async function markAdminNotificationRead(id: number): Promise<{ success: boolean }> {
+  return request(`/api/admin/notifications/${id}/read`, { method: 'PATCH' });
 }
 
-export async function markAllAdminNotificationsRead(): Promise<void> {
-  await apiClient.post('/admin/notifications/read-all');
+export async function markAllAdminNotificationsRead(): Promise<{ success: boolean }> {
+  return request('/api/admin/notifications/read-all', { method: 'POST' });
 }
 
-export async function deleteAdminNotification(id: number): Promise<void> {
-  await apiClient.delete(`/admin/notifications/${id}`);
+export async function deleteAdminNotification(id: number): Promise<{ success: boolean }> {
+  return request(`/api/admin/notifications/${id}`, { method: 'DELETE' });
 }
 
-export async function clearAdminNotifications(): Promise<void> {
-  await apiClient.delete('/admin/notifications');
+export async function clearAdminNotifications(): Promise<{ success: boolean }> {
+  return request('/api/admin/notifications', { method: 'DELETE' });
 }
