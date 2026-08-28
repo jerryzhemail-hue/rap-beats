@@ -3,6 +3,7 @@ import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { getDatabaseClient } from '../database/client.js';
 import { rateLimitMiddleware } from '../middleware/rateLimit.js';
 import { updateRapperSortOrderByName } from '../services/rapperScore.js';
+import { syncBeatmakerStat } from './beats.js';
 
 const router = Router();
 
@@ -12,20 +13,25 @@ router.post('/favorites/:beatId', requireAuth, rateLimitMiddleware('favorites', 
   const { beatId } = req.params;
   const userId = req.user!.id;
 
-  // 检查 beat 是否存在，获取 rapper 信息
-  const beat = await database.queryOne<{ id: number; rapper: string | null }>('SELECT id, rapper FROM beats WHERE id = ?', [beatId]);
+  // 检查 beat 是否存在，获取 rapper 和 uploaded_by 信息
+  const beat = await database.queryOne<{ id: number; rapper: string | null; uploaded_by: number | null }>('SELECT id, rapper, uploaded_by FROM beats WHERE id = ?', [beatId]);
   if (!beat) return res.status(404).json({ error: '伴奏不存在' });
 
   try {
     await database.execute('INSERT INTO favorites (user_id, beat_id) VALUES (?, ?)', [userId, beatId]);
-    
+
+    // 同步 beatmaker_profiles.total_likes（仅新增收藏时）
+    if (beat.uploaded_by) {
+      syncBeatmakerStat(beat.uploaded_by, 'total_likes', 1).catch(() => {});
+    }
+
     // 自动更新关联 rapper 的权重
     if (beat.rapper) {
       updateRapperSortOrderByName(beat.rapper).catch(err => {
         console.error('Failed to update rapper weight after favorite:', err);
       });
     }
-    
+
     res.status(201).json({ message: '收藏成功' });
   } catch (e: any) {
     if (e?.code === 'ER_DUP_ENTRY' || Number(e?.errno) === 1062) {
@@ -46,18 +52,23 @@ router.delete('/favorites/:beatId', requireAuth, async (req: AuthRequest, res) =
   const { beatId } = req.params;
   const userId = req.user!.id;
 
-  // 获取 beat 的 rapper 信息（取消收藏前）
-  const beat = await database.queryOne<{ id: number; rapper: string | null }>('SELECT id, rapper FROM beats WHERE id = ?', [beatId]);
+  // 获取 beat 的 rapper 和 uploaded_by 信息（取消收藏前）
+  const beat = await database.queryOne<{ id: number; rapper: string | null; uploaded_by: number | null }>('SELECT id, rapper, uploaded_by FROM beats WHERE id = ?', [beatId]);
 
-  await database.execute('DELETE FROM favorites WHERE user_id = ? AND beat_id = ?', [userId, beatId]);
-  
+  const result = await database.execute('DELETE FROM favorites WHERE user_id = ? AND beat_id = ?', [userId, beatId]);
+
+  // 同步 beatmaker_profiles.total_likes 递减（仅实际删除了收藏记录时）
+  if (Number(result.affectedRows) > 0 && beat?.uploaded_by) {
+    syncBeatmakerStat(beat.uploaded_by, 'total_likes', -1).catch(() => {});
+  }
+
   // 自动更新关联 rapper 的权重
   if (beat?.rapper) {
     updateRapperSortOrderByName(beat.rapper).catch(err => {
       console.error('Failed to update rapper weight after unfavorite:', err);
     });
   }
-  
+
   res.json({ message: '已取消收藏' });
 });
 

@@ -8,6 +8,7 @@ import { serializeBeatAssets } from '../utils/assets.js';
 import { normalizeArtistName } from '../utils/artistNames.js';
 import { detectBpmFromBuffer } from '../services/bpmDetector.js';
 import type { DatabaseClient } from '../database/client.js';
+import { syncBeatmakerStat } from './beats.js';
 
 // 生成默认封面（SVG 格式，纯色背景 + 标题首字母）
 function generateDefaultCover(title: string): string {
@@ -195,6 +196,10 @@ async function createBeatRecord(
         'INSERT INTO beat_producers (beat_id, rapper_id, rapper_name) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE rapper_id = COALESCE(rapper_id, VALUES(rapper_id))',
         [result.insertId, rapperRecord?.id || null, name]
       );
+    }
+    // 同步 beatmaker_profiles.total_beats
+    if (uploadedBy) {
+      syncBeatmakerStat(uploadedBy, 'total_beats', 1).catch(() => {});
     }
   }
 
@@ -418,6 +423,9 @@ router.post('/beats/upload-direct', requireUploader, async (req: AuthRequest, re
           [result.insertId, rapperRecord?.id || null, rapperName]
         );
       }
+
+      // 同步 beatmaker_profiles.total_beats
+      syncBeatmakerStat(req.user!.id, 'total_beats', 1).catch(() => {});
 
       const beat = await database.queryOne<Record<string, unknown>>('SELECT * FROM beats WHERE id = ?', [result.insertId]);
       if (beat) {

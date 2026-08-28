@@ -81,6 +81,64 @@ async function canManageBeat(req: AuthRequest, beat: BeatRecord) {
   return currentUser?.role === 'admin' || beat.uploaded_by === req.user.id;
 }
 
+/**
+ * 同步 beatmaker_profiles 统计字段（total_beats / total_likes / total_downloads）。
+ * 仅在上传者是已认证 Beatmaker 时更新，非 Beatmaker 静默跳过。
+ * 使用 INSERT ... ON DUPLICATE KEY UPDATE 确保即使 profiles 记录不存在也不报错。
+ */
+export async function syncBeatmakerStat(
+  uploaderId: number,
+  field: 'total_beats' | 'total_likes' | 'total_downloads',
+  delta: number,
+): Promise<void> {
+  const database = getDatabaseClient();
+  // 仅对认证 Beatmaker 更新，避免对 admin/普通用户产生无效记录
+  const bm = await database.queryOne<{ is_beatmaker: number }>(
+    'SELECT is_beatmaker FROM users WHERE id = ?',
+    [uploaderId],
+  );
+  if (!bm || bm.is_beatmaker !== 1) return;
+  await database.execute(
+    `INSERT INTO beatmaker_profiles (user_id, display_name, certified_at, ${field})
+     VALUES (?, '', NOW(), GREATEST(0, ?))
+     ON DUPLICATE KEY UPDATE ${field} = GREATEST(0, ${field} + ?)`,
+    [uploaderId, delta, delta],
+  );
+}
+
+/**
+ * 向客户端返回 beat 文件（远程签名 URL 重定向 或 本地文件流）。
+ */
+function serveBeatFile(res: Response, beat: BeatRecord): void {
+  if (isRemoteStorageEnabled()) {
+    const signedUrl = getSignedAssetUrl('audio', beat.file_path, {
+      expiresInSeconds: 300,
+      forceDownload: true,
+      downloadFileName: getDownloadFileName(beat),
+    });
+    if (!signedUrl) {
+      res.status(404).json({ error: 'Audio file not found' });
+      return;
+    }
+    res.redirect(signedUrl);
+    return;
+  }
+
+  const filePath = resolveLocalAssetPath('audio', beat.file_path);
+  if (!filePath || !fs.existsSync(filePath)) {
+    res.status(404).json({ error: 'Audio file not found' });
+    return;
+  }
+
+  const downloadName = getDownloadFileName(beat);
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="beat-${beat.id}${path.extname(downloadName)}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
+  );
+  res.setHeader('Content-Type', 'audio/mpeg');
+  fs.createReadStream(filePath).pipe(res);
+}
+
 function getDownloadFileName(beat: BeatRecord): string {
   const rawSource = beat.file_path.startsWith('http://') || beat.file_path.startsWith('https://') || beat.file_path.startsWith('//')
     ? new URL(beat.file_path.startsWith('//') ? `https:${beat.file_path}` : beat.file_path).pathname
@@ -571,6 +629,34 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
     });
   }
 
+  // Beatmaker 下载自己上传的作品：跳过 VIP/积分/日限检查
+  const isOwnBeat = beat.uploaded_by === req.user!.id;
+  if (isOwnBeat) {
+    // 记录下载日志（幂等）+ 累加 download_count，但不消耗 VIP 额度或积分权限
+    const ownLogResult = await database.execute(
+      `INSERT INTO downloads (user_id, beat_id) VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
+      [req.user!.id, beat.id]
+    );
+    if (Number(ownLogResult.affectedRows) === 1) {
+      await database.execute(
+        'UPDATE beats SET download_count = download_count + 1 WHERE id = ?',
+        [beat.id]
+      );
+      // 同步 beatmaker_profiles.total_downloads（仅首次下载当天计次）
+      await syncBeatmakerStat(beat.uploaded_by!, 'total_downloads', 1).catch(() => {});
+    }
+    // 更新关联 rapper 权重
+    if (beat.rapper) {
+      updateRapperSortOrderByName(beat.rapper).catch(err => {
+        console.error('Failed to update rapper weight after download:', err);
+      });
+    }
+    // 直接返回文件，跳过 VIP/积分/日限逻辑
+    serveBeatFile(res, beat);
+    return;
+  }
+
   let vipLevel: VipLevel;
   try {
     vipLevel = await getUserVipLevel(req);
@@ -649,6 +735,10 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
       'UPDATE beats SET download_count = download_count + 1 WHERE id = ?',
       [beat.id]
     );
+    // 同步 beatmaker_profiles.total_downloads（仅上传者是 Beatmaker 时生效）
+    if (beat.uploaded_by) {
+      syncBeatmakerStat(beat.uploaded_by, 'total_downloads', 1).catch(() => {});
+    }
   }
 
   // 自动更新关联 rapper 的权重
@@ -658,34 +748,7 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
     });
   }
 
-  if (isRemoteStorageEnabled()) {
-    const signedUrl = getSignedAssetUrl('audio', beat.file_path, {
-      expiresInSeconds: 300,
-      forceDownload: true,
-      downloadFileName: getDownloadFileName(beat)
-    });
-
-    if (!signedUrl) {
-      return res.status(404).json({ error: 'Audio file not found' });
-    }
-
-    return res.redirect(signedUrl);
-  }
-
-  const filePath = resolveLocalAssetPath('audio', beat.file_path);
-  if (!filePath || !fs.existsSync(filePath)) {
-    res.status(404).json({ error: 'Audio file not found' });
-    return;
-  }
-
-  // 中文文件名需要 RFC 5987 编码，否则 HTTP 头非法导致 500
-  const downloadName = getDownloadFileName(beat);
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="beat-${beat.id}${path.extname(downloadName)}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`
-  );
-  res.setHeader('Content-Type', 'audio/mpeg');
-  fs.createReadStream(filePath).pipe(res);
+  serveBeatFile(res, beat);
 });
 
 // GET /api/home/public - 公开首页数据，不需要登录
@@ -871,6 +934,7 @@ router.delete('/beats/:id', requireAuth, async (req: AuthRequest, res: Response)
   }
 
   const coverImage = (beat as any).cover_image as string | null | undefined;
+  const uploaderId = beat.uploaded_by;
 
   await database.transaction(async (tx) => {
     await tx.execute('DELETE FROM favorites WHERE beat_id = ?', [id]);
@@ -882,6 +946,11 @@ router.delete('/beats/:id', requireAuth, async (req: AuthRequest, res: Response)
 
   await deleteStoredAsset('audio', beat.file_path);
   await deleteStoredAsset('cover', coverImage);
+
+  // 同步 beatmaker_profiles 统计：total_beats 递减
+  if (uploaderId) {
+    await syncBeatmakerStat(uploaderId, 'total_beats', -1).catch(() => {});
+  }
 
   res.json({ message: '删除成功' });
 });
