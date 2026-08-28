@@ -751,6 +751,24 @@ export async function initDatabase(
     }
   }
 
+  // ─── 系统通知表（主库） ────────────────────────────────────────
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS system_notifications (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      type VARCHAR(50) NOT NULL,
+      title VARCHAR(200) NOT NULL,
+      content TEXT NULL,
+      is_read TINYINT DEFAULT 0,
+      actor_id INT NULL,
+      target_type VARCHAR(50) NULL,
+      target_id INT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_sn_user (user_id, is_read, created_at),
+      INDEX idx_sn_user_unread (user_id, is_read) USING BTREE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   // ─── 论坛数据库初始化 ───────────────────────────────────────────────────────
   await initForumDatabase(forumDb);
 

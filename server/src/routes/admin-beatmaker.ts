@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { requireAdmin, AuthRequest } from '../middleware/auth.js';
 import { getDatabaseClient } from '../database/client.js';
 import { decryptIdCard, maskIdCard } from '../utils/idcard-cipher.js';
+import { createSystemNotification } from './system-notifications-helper.js';
 
 const router = Router();
 
@@ -265,6 +266,17 @@ router.post('/:id/approve', requireAdmin, async (req: AuthRequest, res: Response
     [reviewerId, now, id]
   );
 
+  // 4. 发送系统通知给申请人
+  await createSystemNotification(
+    app.user_id,
+    'beatmaker_approved',
+    '🎉 Beatmaker 认证已通过',
+    '恭喜！你的认证申请已通过审核，现在可以上传原创伴奏、建立制作人主页、展示作品集了。',
+    reviewerId,
+    'beatmaker_application',
+    id
+  ).catch(() => {});
+
   return res.json({ message: '已通过认证' });
 });
 
@@ -280,8 +292,8 @@ router.post('/:id/reject', requireAdmin, async (req: AuthRequest, res: Response)
     return res.status(400).json({ error: '请填写拒绝原因（至少 5 字）' });
   }
 
-  const app = await database.queryOne<{ id: number; status: string }>(
-    'SELECT id, status FROM beatmaker_applications WHERE id = ?',
+  const app = await database.queryOne<{ id: number; user_id: number; status: string }>(
+    'SELECT id, user_id, status FROM beatmaker_applications WHERE id = ?',
     [id]
   );
   if (!app) return res.status(404).json({ error: '申请不存在' });
@@ -298,6 +310,17 @@ router.post('/:id/reject', requireAdmin, async (req: AuthRequest, res: Response)
       WHERE id = ?`,
     [reject_reason.trim(), reviewerId, now, now, id]
   );
+
+  // 发送系统通知给申请人
+  await createSystemNotification(
+    app.user_id,
+    'beatmaker_rejected',
+    '😞 Beatmaker 认证未通过',
+    `很遗憾，你的认证申请未通过审核。原因：${reject_reason.trim()}。修改资料后可重新申请。`,
+    reviewerId,
+    'beatmaker_application',
+    id
+  ).catch(() => {});
 
   return res.json({ message: '已拒绝' });
 });

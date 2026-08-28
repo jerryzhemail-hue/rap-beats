@@ -111,6 +111,9 @@ async function startServer() {
   const homepageConfigRouter = (await import('./routes/homepage-config.js')).default;
   app.use('/api/homepage-config', homepageConfigRouter);
 
+  const systemNotificationsRouter = (await import('./routes/system-notifications.js')).default;
+  app.use('/api/system-notifications', systemNotificationsRouter);
+
   // Multer 文件校验错误 → 400
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {

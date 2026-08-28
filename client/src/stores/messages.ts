@@ -156,6 +156,18 @@ export const useMessagesStore = defineStore('messages', () => {
       }
     })
 
+    // 监听系统通知事件
+    eventSource.addEventListener('system_notification', (e: MessageEvent) => {
+      if (storeInstanceId !== instanceId) return
+      try {
+        const payload = JSON.parse(e.data) as IncomingNotificationPayload
+        const notificationsStore = useNotificationsStore()
+        notificationsStore.handleIncomingSystemNotification(payload as any)
+      } catch {
+        // 忽略无法解析的事件数据
+      }
+    })
+
     eventSource.onerror = () => {
       if (storeInstanceId !== instanceId) return
       if (eventSource && eventSource.readyState === EventSource.CLOSED) {
