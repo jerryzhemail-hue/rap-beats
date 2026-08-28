@@ -74,8 +74,8 @@ router.post('/register', registerLimiter, async (req, res) => {
   }
 
   // 查询用户角色（第一个注册的用户可能被迁移脚本设为 admin）
-  const userRow = await database.queryOne<{ role: string; vip_level: string; avatar_url: string | null }>(
-    'SELECT role, vip_level, avatar_url FROM users WHERE id = ?',
+  const userRow = await database.queryOne<{ role: string; vip_level: string; avatar_url: string | null; is_beatmaker: number }>(
+    'SELECT role, vip_level, avatar_url, is_beatmaker FROM users WHERE id = ?',
     [result.insertId]
   );
   const role = userRow?.role || 'user';
@@ -86,6 +86,7 @@ router.post('/register', registerLimiter, async (req, res) => {
     username,
     email,
     role,
+    is_beatmaker: userRow?.is_beatmaker ?? 0,
     vip_level: vipLevel,
     avatar_url: avatarUrl
   });
@@ -116,6 +117,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     vip_level: string;
     created_at: string;
     avatar_url: string | null;
+    is_beatmaker: number;
   }>(
     'SELECT * FROM users WHERE username = ? OR email = ?',
     [login, login]
@@ -142,7 +144,8 @@ router.post('/login', loginLimiter, async (req, res) => {
     email: user.email,
     role: user.role,
     vip_level: getEffectiveVipLevel(user),
-    avatar_url: user.avatar_url || null
+    avatar_url: user.avatar_url || null,
+    is_beatmaker: user.is_beatmaker ?? 0
   });
   const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
 

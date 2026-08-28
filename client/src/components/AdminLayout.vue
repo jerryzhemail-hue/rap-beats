@@ -14,9 +14,11 @@ const pageTitle = computed(() => {
   if (route.path === '/admin/rappers') return 'Rapper 管理'
   if (route.path === '/admin/banners') return 'Banner 管理'
   if (route.path === '/admin/forum') return '论坛管理'
+  if (route.path === '/admin/beatmaker-approvals') return 'Beatmaker 管理'
   if (route.path === '/admin/feedback') return '意见反馈'
   if (route.path === '/admin/license') return '使用协议'
   if (route.path === '/admin/home-footer') return '首页尾部'
+  if (route.path === '/admin/homepage-config') return '首页头部配置'
   return '管理后台'
 })
 </script>
@@ -57,6 +59,10 @@ const pageTitle = computed(() => {
           <span class="nav-icon">💬</span>
           论坛管理
         </router-link>
+        <router-link to="/admin/beatmaker-approvals" class="nav-item" :class="{ active: route.path === '/admin/beatmaker-approvals' }">
+          <span class="nav-icon">🎭</span>
+          Beatmaker 管理
+        </router-link>
         <router-link to="/admin/feedback" class="nav-item" :class="{ active: route.path === '/admin/feedback' }">
           <span class="nav-icon">📮</span>
           意见反馈
@@ -68,6 +74,10 @@ const pageTitle = computed(() => {
         <router-link to="/admin/home-footer" class="nav-item" :class="{ active: route.path === '/admin/home-footer' }">
           <span class="nav-icon">🧩</span>
           首页尾部
+        </router-link>
+        <router-link to="/admin/homepage-config" class="nav-item" :class="{ active: route.path === '/admin/homepage-config' }">
+          <span class="nav-icon">🧭</span>
+          首页头部配置
         </router-link>
       </nav>
       <div class="admin-footer">

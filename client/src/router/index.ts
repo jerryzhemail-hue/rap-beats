@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useHomepageConfigStore } from '@/stores/homepage-config'
 import HomeView from '@/views/HomeView.vue'
 import BeatsView from '@/views/BeatsView.vue'
 import LoginView from '@/views/LoginView.vue'
@@ -11,14 +12,14 @@ const router = createRouter({
     { path: '/', component: HomeView, meta: { public: true } },
     { path: '/login', component: LoginView, meta: { guest: true } },
     { path: '/register', component: RegisterView, meta: { guest: true } },
-    { path: '/beats', component: BeatsView, meta: { requiresAuth: true } },
-    { path: '/beats/:id', component: () => import('@/views/BeatDetailView.vue'), meta: { requiresAuth: true } },
+    { path: '/beats', component: BeatsView, meta: { requiresAuth: true, moduleKey: 'nav_beats' } },
+    { path: '/beats/:id', component: () => import('@/views/BeatDetailView.vue'), meta: { requiresAuth: true, moduleKey: 'nav_beats' } },
     { path: '/rapper/:id', component: () => import('../views/RapperDetailView.vue') },
     {
       path: '/upload',
       name: 'Upload',
       component: () => import('../views/UploadView.vue'),
-      meta: { requiresAuth: true, requiresUploader: true }
+      meta: { requiresAuth: true, requiresUploader: true, moduleKey: 'nav_upload' }
     },
     {
       path: '/profile',
@@ -59,14 +60,15 @@ const router = createRouter({
         { path: 'feedback', name: 'AdminFeedback', component: () => import('../views/admin/FeedbackView.vue') },
         { path: 'license', name: 'AdminLicense', component: () => import('../views/admin/LicenseView.vue') },
         { path: 'home-footer', name: 'AdminHomeFooter', component: () => import('../views/admin/HomeFooterManageView.vue') },
-        { path: 'beatmaker-approvals', name: 'AdminBeatmakerApprovals', component: () => import('../views/admin/BeatmakerApprovalsView.vue') }
+        { path: 'homepage-config', name: 'AdminHomepageConfig', component: () => import('../views/admin/HomepageConfigView.vue') },
+        { path: 'beatmaker-approvals', name: 'AdminBeatmakerApprovals', component: () => import('../views/admin/BeatmakerManageView.vue') }
       ]
     },
     {
       path: '/forum',
       name: 'Forum',
       component: () => import('../views/ForumView.vue'),
-      meta: { public: true }
+      meta: { public: true, moduleKey: 'nav_forum' }
     },
     {
       path: '/forum/post/:id',
@@ -126,7 +128,7 @@ const router = createRouter({
       path: '/beatmakers',
       name: 'BeatmakerList',
       component: () => import('../views/BeatmakerListView.vue'),
-      meta: { public: true }
+      meta: { public: true, moduleKey: 'nav_beatmakers' }
     },
     {
       path: '/beatmaker/profile/:userId',
@@ -157,6 +159,15 @@ router.beforeEach((to) => {
 
   if (to.meta.guest && authStore.isAuthenticated) {
     return { path: '/' }
+  }
+
+  // 首页头部模块可见性拦截：管理员始终放行；其他角色被隐藏时跳回首页
+  const moduleKey = to.meta.moduleKey as string | undefined
+  if (moduleKey) {
+    const homepageConfig = useHomepageConfigStore()
+    if (!homepageConfig.isVisible(moduleKey)) {
+      return { path: '/' }
+    }
   }
 })
 

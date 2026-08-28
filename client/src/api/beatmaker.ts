@@ -184,3 +184,55 @@ export async function rejectBeatmakerApplication(id: number, reason: string) {
     body: JSON.stringify({ reason }),
   });
 }
+
+// ─── 管理员侧 — Beatmaker 管理接口 ────────────────────────────────
+
+export interface AdminBeatmakerStats {
+  total_beatmakers: number;
+  pending_applications: number;
+  total_beats: number;
+  total_downloads: number;
+}
+
+export interface AdminBeatmakerItem {
+  user_id: number;
+  username: string;
+  display_name: string;
+  avatar_url: string | null;
+  bio: string | null;
+  portfolio_url: string | null;
+  certified_at: string;
+  beat_count: number;
+  dl_sum: number;
+  like_sum: number;
+}
+
+export async function fetchAdminBeatmakerStats() {
+  return request<AdminBeatmakerStats>('/api/admin/beatmaker-applications/stats');
+}
+
+export async function fetchAdminBeatmakers(params: {
+  search?: string;
+  sort?: 'certified_at' | 'total_beats' | 'total_downloads';
+  page?: number;
+  limit?: number;
+} = {}) {
+  const query = new URLSearchParams();
+  if (params.search) query.set('search', params.search);
+  if (params.sort) query.set('sort', params.sort);
+  if (params.page) query.set('page', String(params.page));
+  if (params.limit) query.set('limit', String(params.limit ?? 20));
+  return request<{
+    total: number;
+    page: number;
+    limit: number;
+    items: AdminBeatmakerItem[];
+  }>(`/api/admin/beatmaker-applications/beatmakers?${query.toString()}`);
+}
+
+export async function revokeBeatmaker(userId: number) {
+  return request<{ message: string }>(
+    `/api/admin/beatmaker-applications/beatmakers/${userId}/revoke`,
+    { method: 'POST' }
+  );
+}

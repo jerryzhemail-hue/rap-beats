@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useMessagesStore } from '@/stores/messages'
 import { useNotificationsStore } from '@/stores/notifications'
+import { useHomepageConfigStore } from '@/stores/homepage-config'
 import { resolveAvatarUrl } from '@/utils/assets'
 import AuthPromptModal from './AuthPromptModal.vue'
 
@@ -16,6 +17,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 const messagesStore = useMessagesStore()
 const notificationsStore = useNotificationsStore()
+const homepageConfigStore = useHomepageConfigStore()
 const showAuthPrompt = ref(false)
 const showThemePicker = ref(false)
 
@@ -113,12 +115,14 @@ function closeUserMenu() { showUserMenu.value = false }
       </RouterLink>
       <nav class="nav-links">
         <RouterLink to="/" :class="{ active: route.path === '/' }">首页</RouterLink>
-        <a v-if="!authStore.isAuthenticated" href="#" class="nav-link" @click.prevent="handleBeatsClick">伴奏库</a>
-        <RouterLink v-else to="/beats" :class="{ active: route.path.startsWith('/beats') }">伴奏库</RouterLink>
-        <RouterLink to="/forum" :class="{ active: route.path.startsWith('/forum') }">论坛</RouterLink>
-        <RouterLink v-if="authStore.isAuthenticated && authStore.isAdmin" to="/upload" :class="{ active: route.path === '/upload' }">上传</RouterLink>
-        <RouterLink v-if="authStore.isAuthenticated && authStore.canUpload && !authStore.isAdmin" to="/upload" :class="{ active: route.path === '/upload' }">上传</RouterLink>
-        <RouterLink to="/beatmakers" :class="{ active: route.path.startsWith('/beatmaker') }">认证 Beatmaker</RouterLink>
+        <template v-if="homepageConfigStore.isVisible('nav_beats')">
+          <a v-if="!authStore.isAuthenticated" href="#" class="nav-link" @click.prevent="handleBeatsClick">伴奏库</a>
+          <RouterLink v-else to="/beats" :class="{ active: route.path.startsWith('/beats') }">伴奏库</RouterLink>
+        </template>
+        <RouterLink v-if="homepageConfigStore.isVisible('nav_forum')" to="/forum" :class="{ active: route.path.startsWith('/forum') }">论坛</RouterLink>
+        <RouterLink v-if="homepageConfigStore.isVisible('nav_upload') && authStore.isAuthenticated && authStore.isAdmin" to="/upload" :class="{ active: route.path === '/upload' }">上传</RouterLink>
+        <RouterLink v-if="homepageConfigStore.isVisible('nav_upload') && authStore.isAuthenticated && authStore.canUpload && !authStore.isAdmin" to="/upload" :class="{ active: route.path === '/upload' }">上传</RouterLink>
+        <RouterLink v-if="homepageConfigStore.isVisible('nav_beatmakers')" to="/beatmakers" :class="{ active: route.path.startsWith('/beatmaker') }">认证 Beatmaker</RouterLink>
         <RouterLink v-if="authStore.isAdmin" to="/admin" :class="{ active: route.path.startsWith('/admin') }">管理后台</RouterLink>
       </nav>
       <div class="header-auth">
@@ -164,6 +168,7 @@ function closeUserMenu() { showUserMenu.value = false }
               </router-link>
               <span class="username">
                 {{ authStore.user?.username }}
+                <span v-if="authStore.isBeatmaker" class="beatmaker-tag">Beatmaker</span>
                 <span v-if="authStore.isVip" class="vip-tag" :style="{ background: vipBadgeConfig[authStore.vipLevel]?.color || '#f59e0b' }">{{ vipBadgeConfig[authStore.vipLevel]?.text || 'VIP' }}</span>
               </span>
             </button>
@@ -333,6 +338,19 @@ function closeUserMenu() { showUserMenu.value = false }
   color: #000;
   font-size: 10px;
   font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  letter-spacing: 0.5px;
+  vertical-align: middle;
+}
+
+.beatmaker-tag {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
   padding: 1px 6px;
   border-radius: 3px;
   margin-left: 6px;

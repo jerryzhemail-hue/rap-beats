@@ -108,6 +108,9 @@ async function startServer() {
   app.use('/api', feedbackRouter);
   app.use('/api', homeFooterRouter);
 
+  const homepageConfigRouter = (await import('./routes/homepage-config.js')).default;
+  app.use('/api/homepage-config', homepageConfigRouter);
+
   // Multer 文件校验错误 → 400
   app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {

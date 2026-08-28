@@ -96,13 +96,14 @@ onMounted(async () => {
   color: var(--text-secondary, #6b7280);
 }
 
-.state.error { color: #b91c1c; }
+.state.error { color: var(--error); }
 
 .profile-card {
-  background: var(--card-bg, #fff);
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border);
   border-radius: 16px;
   padding: 32px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 4px 24px var(--shadow);
 }
 
 .profile-header {
@@ -111,7 +112,7 @@ onMounted(async () => {
   align-items: flex-start;
   margin-bottom: 24px;
   padding-bottom: 24px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid var(--border);
 }
 
 .avatar-wrap {
@@ -129,7 +130,7 @@ onMounted(async () => {
 }
 
 .avatar-placeholder {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: #fff;
   display: flex;
   align-items: center;
@@ -172,7 +173,7 @@ section h3 {
 
 section p { margin: 0 0 8px; line-height: 1.6; }
 
-section a { color: #d97706; text-decoration: none; }
+section a { color: var(--accent-hover); text-decoration: none; }
 section a:hover { text-decoration: underline; }
 
 .stats-section {
@@ -183,7 +184,7 @@ section a:hover { text-decoration: underline; }
 }
 
 .stat-card {
-  background: rgba(245, 158, 11, 0.06);
+  background: var(--accent-light);
   padding: 16px;
   border-radius: 12px;
   text-align: center;
@@ -194,7 +195,7 @@ section a:hover { text-decoration: underline; }
 .stat-value {
   font-size: 24px;
   font-weight: 700;
-  color: #b45309;
+  color: var(--accent);
 }
 
 .stat-label {

@@ -18,9 +18,17 @@ onMounted(async () => {
 
 const beatmakers = computed(() => store.list)
 const isAuthenticated = computed(() => authStore.isAuthenticated)
+const isBeatmaker = computed(() => authStore.isBeatmaker)
+
+/** 按钮文本：未登录→成为 Beatmaker，已登录未认证→申请认证，已认证→我的资料 */
+const applyButtonText = computed(() => {
+  if (!isAuthenticated.value) return '成为 Beatmaker'
+  if (isBeatmaker.value) return '我的资料'
+  return '申请认证'
+})
 
 /** 点击卡片：未登录弹出引导，已登录跳转详情 */
-function handleCardClick(userId: string) {
+function handleCardClick(userId: number) {
   if (!isAuthenticated.value) {
     showAuthPrompt.value = true
     return
@@ -28,10 +36,14 @@ function handleCardClick(userId: string) {
   router.push(`/beatmaker/profile/${userId}`)
 }
 
-/** 点击申请认证 */
+/** 点击申请认证 / 我的资料 */
 function handleApply() {
   if (!isAuthenticated.value) {
     showAuthPrompt.value = true
+    return
+  }
+  if (isBeatmaker.value) {
+    router.push(`/beatmaker/profile/${authStore.user?.id}`)
     return
   }
   router.push('/beatmaker/apply')
@@ -70,7 +82,7 @@ function handleAuthClose() {
             <path d="M12 20h9"/>
             <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
           </svg>
-          <span>{{ isAuthenticated ? '申请认证' : '成为 Beatmaker' }}</span>
+          <span>{{ applyButtonText }}</span>
         </button>
       </div>
     </header>
@@ -282,7 +294,7 @@ function handleAuthClose() {
   align-items: center;
   gap: 6px;
   padding: 10px 18px;
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: #fff;
   border: none;
   border-radius: 10px;
@@ -290,13 +302,13 @@ function handleAuthClose() {
   font-size: 14px;
   cursor: pointer;
   transition: all 0.2s;
-  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+  box-shadow: 0 4px 12px var(--shadow);
   flex-shrink: 0;
 }
 
 .btn-apply:hover {
   transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.4);
+  box-shadow: 0 6px 18px var(--shadow);
 }
 
 .state {
@@ -314,8 +326,8 @@ function handleAuthClose() {
 /* 登录引导横幅 */
 .auth-banner {
   position: relative;
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(124, 58, 237, 0.12));
-  border: 1px solid rgba(245, 158, 11, 0.25);
+  background: var(--accent-light);
+  border: 1px solid var(--border);
   border-radius: 16px;
   padding: 20px 24px;
   margin-bottom: 20px;
@@ -328,7 +340,7 @@ function handleAuthClose() {
   right: -20%;
   width: 400px;
   height: 400px;
-  background: radial-gradient(circle, rgba(245, 158, 11, 0.2) 0%, transparent 70%);
+  background: radial-gradient(circle, var(--accent-light) 0%, transparent 70%);
   pointer-events: none;
 }
 
@@ -344,13 +356,13 @@ function handleAuthClose() {
   width: 56px;
   height: 56px;
   border-radius: 14px;
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.4);
+  box-shadow: 0 4px 14px var(--shadow);
 }
 
 .banner-text {
@@ -391,23 +403,24 @@ function handleAuthClose() {
 }
 
 .banner-btn.primary {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: #fff;
-  box-shadow: 0 3px 10px rgba(245, 158, 11, 0.35);
+  box-shadow: 0 3px 10px var(--shadow);
 }
 
 .banner-btn.primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 5px 14px rgba(245, 158, 11, 0.45);
+  box-shadow: 0 5px 14px var(--shadow);
 }
 
 .banner-btn.secondary {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--accent-light);
   color: var(--text-primary, #111827);
 }
 
 .banner-btn.secondary:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--accent-light);
+  filter: brightness(1.1);
 }
 
 /* Beatmaker 卡片网格 */
@@ -430,10 +443,11 @@ function handleAuthClose() {
 
 .bm-card {
   position: relative;
-  background: var(--card-bg, #fff);
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 2px 12px var(--shadow);
   cursor: pointer;
   transition: transform 0.15s, box-shadow 0.15s;
   overflow: hidden;
@@ -441,7 +455,7 @@ function handleAuthClose() {
 
 .bm-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 16px var(--shadow);
 }
 
 .bm-avatar {
@@ -460,7 +474,7 @@ function handleAuthClose() {
 }
 
 .avatar-placeholder {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: #fff;
   display: flex;
   align-items: center;
@@ -506,7 +520,7 @@ function handleAuthClose() {
   align-items: center;
   gap: 4px;
   font-size: 13px;
-  color: #d97706;
+  color: var(--accent-hover);
   text-decoration: none;
 }
 
@@ -522,7 +536,7 @@ function handleAuthClose() {
   gap: 16px;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  border-top: 1px solid var(--border);
 }
 
 .stat { display: flex; flex-direction: column; align-items: center; }
@@ -538,7 +552,7 @@ function handleAuthClose() {
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  background: rgba(17, 24, 39, 0.85);
+  background: var(--overlay);
   color: #fff;
   border-radius: 20px;
   font-size: 11px;
@@ -550,7 +564,7 @@ function handleAuthClose() {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--overlay);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -567,7 +581,7 @@ function handleAuthClose() {
   width: 100%;
   text-align: center;
   position: relative;
-  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 24px 72px var(--shadow);
 }
 
 .modal-close {
@@ -584,7 +598,7 @@ function handleAuthClose() {
 }
 
 .modal-close:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--accent-light);
   color: var(--text-primary, #fff);
 }
 
@@ -593,8 +607,8 @@ function handleAuthClose() {
   height: 84px;
   margin: 0 auto 20px;
   border-radius: 24px;
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(124, 58, 237, 0.15));
-  color: #f59e0b;
+  background: var(--accent-light);
+  color: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -619,7 +633,7 @@ function handleAuthClose() {
   padding: 0;
   margin: 0 0 28px;
   text-align: left;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--accent-light);
   border-radius: 12px;
   padding: 16px;
 }
@@ -634,7 +648,7 @@ function handleAuthClose() {
 }
 
 .modal-perks li svg {
-  color: #22c55e;
+  color: var(--success);
   flex-shrink: 0;
   margin-top: 2px;
 }
@@ -661,24 +675,25 @@ function handleAuthClose() {
 }
 
 .modal-btn-secondary {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--accent-light);
   color: var(--text-secondary, #b0b0b0);
 }
 
 .modal-btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--accent-light);
+  filter: brightness(1.15);
   color: var(--text-primary, #fff);
 }
 
 .modal-btn-primary {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: #fff;
-  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.35);
+  box-shadow: 0 4px 14px var(--shadow);
 }
 
 .modal-btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.45);
+  box-shadow: 0 6px 18px var(--shadow);
 }
 
 .modal-btn-primary:active {
@@ -694,7 +709,7 @@ function handleAuthClose() {
 .link-btn {
   background: none;
   border: none;
-  color: #f59e0b;
+  color: var(--accent);
   font-weight: 600;
   cursor: pointer;
   padding: 0;
@@ -736,7 +751,7 @@ function handleAuthClose() {
 }
 
 .btn.primary {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: #fff;
 }
 </style>

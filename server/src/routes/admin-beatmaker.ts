@@ -82,6 +82,120 @@ router.get('/', requireAdmin, async (req: AuthRequest, res: Response) => {
   });
 });
 
+// ─── GET /api/admin/beatmaker-applications/stats ──────────────
+// 概览统计
+router.get('/stats', requireAdmin, async (_req: AuthRequest, res: Response) => {
+  const database = getDatabaseClient();
+
+  const beatmakerCount = await database.queryOne<{ cnt: number }>(
+    'SELECT COUNT(*) AS cnt FROM beatmaker_profiles'
+  );
+  const pendingCount = await database.queryOne<{ cnt: number }>(
+    "SELECT COUNT(*) AS cnt FROM beatmaker_applications WHERE status = 'pending'"
+  );
+  const beatsCount = await database.queryOne<{ cnt: number }>(
+    `SELECT COUNT(*) AS cnt FROM beats b INNER JOIN users u ON u.id = b.uploaded_by WHERE u.is_beatmaker = 1`
+  );
+  const downloadsSum = await database.queryOne<{ total: number }>(
+    `SELECT COALESCE(SUM(b.download_count), 0) AS total FROM beats b INNER JOIN users u ON u.id = b.uploaded_by WHERE u.is_beatmaker = 1`
+  );
+
+  return res.json({
+    total_beatmakers: beatmakerCount?.cnt ?? 0,
+    pending_applications: pendingCount?.cnt ?? 0,
+    total_beats: beatsCount?.cnt ?? 0,
+    total_downloads: downloadsSum?.total ?? 0,
+  });
+});
+
+// ─── GET /api/admin/beatmaker-applications/beatmakers ──────────
+// 认证 Beatmaker 列表（搜索 / 排序 / 分页）
+router.get('/beatmakers', requireAdmin, async (req: AuthRequest, res: Response) => {
+  const database = getDatabaseClient();
+  const search = ((req.query.search as string) || '').trim();
+  const sort = (req.query.sort as string) || 'certified_at';
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.max(1, Math.min(50, parseInt(req.query.limit as string) || 20));
+  const offset = (page - 1) * limit;
+
+  const where = ['1=1'];
+  const params: unknown[] = [];
+  if (search) {
+    where.push('(u.username LIKE ? OR p.display_name LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`);
+  }
+
+  const sortColumn = sort === 'total_beats' ? 'beat_count' : sort === 'total_downloads' ? 'dl_sum' : 'p.certified_at';
+  const sortDir = sort === 'total_beats' || sort === 'total_downloads' ? 'DESC' : 'DESC';
+
+  const total = await database.queryOne<{ total: number }>(
+    `SELECT COUNT(*) AS total
+       FROM beatmaker_profiles p
+       INNER JOIN users u ON u.id = p.user_id
+      WHERE ${where.join(' AND ')}`,
+    params
+  );
+
+  const rows = await database.queryMany<{
+    user_id: number;
+    username: string;
+    display_name: string;
+    avatar_url: string | null;
+    bio: string | null;
+    portfolio_url: string | null;
+    certified_at: string;
+    beat_count: number;
+    dl_sum: number;
+    like_sum: number;
+  }>(
+    `SELECT p.user_id, u.username, p.display_name, p.avatar_url, p.bio,
+            p.portfolio_url, p.certified_at, p.total_likes AS like_sum,
+            (SELECT COUNT(*) FROM beats b WHERE b.uploaded_by = p.user_id) AS beat_count,
+            (SELECT COALESCE(SUM(b.download_count), 0) FROM beats b WHERE b.uploaded_by = p.user_id) AS dl_sum
+       FROM beatmaker_profiles p
+       INNER JOIN users u ON u.id = p.user_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY ${sortColumn} ${sortDir}
+      LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+
+  return res.json({
+    total: total?.total ?? 0,
+    page,
+    limit,
+    items: rows,
+  });
+});
+
+// ─── POST /api/admin/beatmaker-applications/beatmakers/:userId/revoke ─
+// 撤销 Beatmaker 认证
+router.post('/beatmakers/:userId/revoke', requireAdmin, async (req: AuthRequest, res: Response) => {
+  const database = getDatabaseClient();
+  const userId = parseInt(req.params.userId as string, 10);
+  if (!userId || isNaN(userId)) return res.status(400).json({ error: '无效的用户 ID' });
+
+  const user = await database.queryOne<{ is_beatmaker: number }>(
+    'SELECT is_beatmaker FROM users WHERE id = ?',
+    [userId]
+  );
+  if (!user) return res.status(404).json({ error: '用户不存在' });
+  if (!user.is_beatmaker) return res.status(409).json({ error: '该用户未认证 Beatmaker' });
+
+  // 1. 撤销 users.is_beatmaker
+  await database.execute(
+    'UPDATE users SET is_beatmaker = 0, beatmaker_certified_at = NULL WHERE id = ?',
+    [userId]
+  );
+  // 2. 删除 beatmaker_profiles 记录
+  await database.execute(
+    'DELETE FROM beatmaker_profiles WHERE user_id = ?',
+    [userId]
+  );
+
+  return res.json({ message: '已撤销认证' });
+});
+
 // ─── GET /api/admin/beatmaker-applications/:id ─────────────────
 // 单条详情（含加密身份证号，仅用于审计）
 router.get('/:id', requireAdmin, async (req: AuthRequest, res: Response) => {

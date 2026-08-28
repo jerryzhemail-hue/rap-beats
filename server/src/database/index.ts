@@ -701,7 +701,41 @@ export async function initDatabase(
     );
   }
 
-  const existingFaqCount = await db.queryOne<{ count: number }>('SELECT COUNT(*) as count FROM home_footer_faqs');
+  // ─── 首页模块可见性配置表 ────────────────────────────────
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS homepage_module_config (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      module_key VARCHAR(50) NOT NULL UNIQUE,
+      module_label VARCHAR(100) NOT NULL,
+      sort_order INT DEFAULT 0,
+      visible_to_guest TINYINT DEFAULT 1,
+      visible_to_user TINYINT DEFAULT 1,
+      visible_to_vip TINYINT DEFAULT 1,
+      visible_to_beatmaker TINYINT DEFAULT 1,
+      visible_to_admin TINYINT DEFAULT 1,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      updated_by INT NULL,
+      INDEX idx_hpmc_sort (sort_order)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // 种子数据：导航模块
+  const moduleSeedExists = await db.queryOne<{ c: number }>(
+    'SELECT COUNT(*) AS c FROM homepage_module_config'
+  );
+  if ((moduleSeedExists?.c ?? 0) === 0) {
+    await db.execute(
+      `INSERT INTO homepage_module_config (module_key, module_label, sort_order, visible_to_guest, visible_to_user, visible_to_vip, visible_to_beatmaker, visible_to_admin) VALUES
+        ('nav_beats', '伴奏库', 1, 1, 1, 1, 1, 1),
+        ('nav_forum', '论坛', 2, 1, 1, 1, 1, 1),
+        ('nav_upload', '上传', 3, 0, 0, 0, 1, 1),
+        ('nav_beatmakers', '认证 Beatmaker', 4, 1, 1, 1, 1, 1)`
+    );
+  }
+  // 种子数据：常见问题
+  const existingFaqCount = await db.queryOne<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM home_footer_faqs'
+  );
   if ((existingFaqCount?.count ?? 0) === 0) {
     const defaultFaqs = [
       { category: '授权与版权', question: '下载 Beat 后可以直接商用吗？', answer: '不可以。普通下载仅限个人非商业使用；如需商用（流媒体发布、商演、影视/广告配乐等），须联系制作人单独购买商用 License。', sort_order: 1 },

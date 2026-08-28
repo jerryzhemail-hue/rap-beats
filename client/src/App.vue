@@ -9,12 +9,14 @@ import { usePlayerStore } from '@/stores/player'
 import { useAuthStore } from '@/stores/auth'
 import { useMessagesStore } from '@/stores/messages'
 import { useNotificationsStore } from '@/stores/notifications'
+import { useHomepageConfigStore } from '@/stores/homepage-config'
 
 const route = useRoute()
 const playerStore = usePlayerStore()
 const authStore = useAuthStore()
 const messagesStore = useMessagesStore()
 const notificationsStore = useNotificationsStore()
+const homepageConfigStore = useHomepageConfigStore()
 const showMembershipBanner = ref(false)
 
 // 暴露给 AppHeader 调用
@@ -39,8 +41,14 @@ watch(
     if (authed && authStore.token) {
       messagesStore.connect(authStore.token)
       notificationsStore.refreshUnreadCount()
+      // 登录后拉取首页头部模块可见性配置（按角色过滤）
+      homepageConfigStore.reset()
+      homepageConfigStore.load()
     } else {
       messagesStore.disconnect()
+      // 登出后重置为游客配置
+      homepageConfigStore.reset()
+      homepageConfigStore.load()
     }
   },
   { immediate: true }
