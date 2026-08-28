@@ -170,10 +170,18 @@ router.post('/forum/sign-in', signInLimiter, requireAuth, async (req: AuthReques
       signInPoints = Math.min(signInPoints + 1, 5);
     }
 
-    await db.execute(
-      'INSERT INTO forum_sign_ins (user_id, sign_date, points) VALUES (?, ?, ?)',
-      [userId, today, signInPoints]
-    );
+    try {
+      await db.execute(
+        'INSERT INTO forum_sign_ins (user_id, sign_date, points) VALUES (?, ?, ?)',
+        [userId, today, signInPoints]
+      );
+    } catch (err: any) {
+      // 并发：两次签到请求竞争通过 SELECT，UNIQUE(user_id,sign_date) 第二次被挡
+      if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+        return res.status(400).json({ error: '今天已签到' });
+      }
+      throw err;
+    }
 
     // 1. 发放基础签到积分
     await changePoints({

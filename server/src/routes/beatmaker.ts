@@ -69,13 +69,29 @@ router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
   }
 
   const encrypted = encryptIdCard(id_card_no.trim());
-  const result = await database.execute(
-    `INSERT INTO beatmaker_applications
-       (user_id, real_name, id_card_no_enc, portfolio_url, sample_work_url, bio, status)
-     VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-    [userId, real_name.trim(), encrypted, portfolio_url.trim(), sample_work_url.trim(), bio.trim()]
-  );
-  return res.json({ message: '申请已提交，请等待审核', application_id: result.insertId });
+  try {
+    const result = await database.execute(
+      `INSERT INTO beatmaker_applications
+         (user_id, real_name, id_card_no_enc, portfolio_url, sample_work_url, bio, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+      [userId, real_name.trim(), encrypted, portfolio_url.trim(), sample_work_url.trim(), bio.trim()]
+    );
+    return res.json({ message: '申请已提交，请等待审核', application_id: result.insertId });
+  } catch (error: any) {
+    // pending_user_unique 生成列 + UNIQUE 会拦截同一用户第 2 条 pending 申请，
+    // 把底层冲突翻译成与应用层分支一致的 409，避免竞态下出现 500。
+    if (error?.code === 'ER_DUP_ENTRY' || Number(error?.errno) === 1062) {
+      const existing = await database.queryOne<{ id: number }>(
+        "SELECT id FROM beatmaker_applications WHERE user_id = ? AND status = 'pending' LIMIT 1",
+        [userId]
+      );
+      return res.status(409).json({
+        error: '你已有待审核的申请，请耐心等待',
+        application_id: existing?.id ?? undefined
+      });
+    }
+    throw error;
+  }
 });
 
 // ─── GET /api/beatmaker/application/me ────────────────────────
@@ -138,7 +154,7 @@ router.get('/application/me', requireAuth, async (req: AuthRequest, res) => {
 // 公开的 Beatmaker 档案
 router.get('/profile/:userId', async (req: Request, res) => {
   const database = getDatabaseClient();
-  const userId = parseInt(req.params.userId, 10);
+  const userId = parseInt(req.params.userId as string, 10);
   if (!userId || isNaN(userId)) return res.status(400).json({ error: '无效的 userId' });
 
   const row = await database.queryOne<{

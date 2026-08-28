@@ -100,6 +100,36 @@ export async function initDatabase(
       INDEX idx_bmapp_created_at (created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  // P1-A 加固：同一用户仅允许存在 1 条 status='pending' 的申请（历史 approved/rejected 允许多条）
+  const bmAppColExists = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'beatmaker_applications'
+        AND COLUMN_NAME = 'pending_user_unique'`
+  );
+  if (!bmAppColExists || bmAppColExists.c === 0) {
+    await db.execute(
+      'ALTER TABLE beatmaker_applications ' +
+      "ADD COLUMN pending_user_unique INT AS (IF(status = 'pending', user_id, NULL)) STORED"
+    );
+  }
+  const bmAppUniqueExists = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'beatmaker_applications'
+        AND INDEX_NAME = 'uk_beatmaker_applications_pending_user'`
+  );
+  if (!bmAppUniqueExists || bmAppUniqueExists.c === 0) {
+    // 先删同用户多条 pending 的尾巴（保留 id 最小），保证 ALTER UNIQUE 可成功
+    await db.execute(`
+      DELETE t FROM beatmaker_applications t
+      JOIN beatmaker_applications k
+        ON k.user_id = t.user_id AND k.status = t.status
+      WHERE t.status = 'pending' AND k.status = 'pending' AND k.id < t.id
+    `);
+    await db.execute(
+      'ALTER TABLE beatmaker_applications ' +
+      'ADD UNIQUE KEY uk_beatmaker_applications_pending_user (pending_user_unique)'
+    );
+  }
 
   // Beatmaker 认证通过后的资料表（1:1 with users）
   await db.execute(`
@@ -222,6 +252,44 @@ export async function initDatabase(
       CONSTRAINT fk_downloads_beat FOREIGN KEY (beat_id) REFERENCES beats(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  // P0-B 加固：同一用户同一伴奏同一天只应计 1 次下载，避免下载额度与 download_count 被多扣。
+  // 采用 STORED generated column + 复合 UNIQUE 实现幂等。
+  const downloadsDateColExists = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'downloads'
+        AND COLUMN_NAME = 'created_date'
+      LIMIT 1`
+  );
+  if (!downloadsDateColExists || downloadsDateColExists.c === 0) {
+    await db.execute(
+      'ALTER TABLE downloads ADD COLUMN created_date DATE AS (DATE(created_at)) STORED'
+    );
+  }
+  const downloadsUniqueExists = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c
+       FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'downloads'
+        AND INDEX_NAME = 'uk_downloads_user_beat_date'
+      LIMIT 1`
+  );
+  if (!downloadsUniqueExists || downloadsUniqueExists.c === 0) {
+    // 先删同日重复（保留 id 最小），确保老库 ALTER 能成功
+    await db.execute(`
+      DELETE t FROM downloads t
+      LEFT JOIN (
+        SELECT MIN(id) keep_id
+          FROM downloads
+         GROUP BY user_id, beat_id, DATE(created_at)
+      ) k ON t.id = k.keep_id
+      WHERE k.keep_id IS NULL
+    `);
+    await db.execute(
+      'ALTER TABLE downloads ADD UNIQUE KEY uk_downloads_user_beat_date (user_id, beat_id, created_date)'
+    );
+  }
 
   // beat_license_agreements 表：记录用户对每个 beat 的使用协议同意状态
   await db.execute(`
@@ -344,6 +412,40 @@ export async function initDatabase(
     );
   }
 
+  // beat_license_templates：单活跃模板约束（仅当 is_active=1 时全局唯一，允许多条非活跃历史版本）
+  const activeCol = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'beat_license_templates'
+       AND COLUMN_NAME = 'active_flag_unique'
+     LIMIT 1`
+  );
+  if (!activeCol || activeCol.c === 0) {
+    await db.execute(
+      `ALTER TABLE beat_license_templates
+       ADD COLUMN active_flag_unique INT AS (IF(is_active = 1, 1, NULL)) STORED`
+    );
+  }
+  const activeUnique = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c
+     FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'beat_license_templates'
+       AND INDEX_NAME = 'uk_beat_license_active_flag'
+       AND NON_UNIQUE = 0
+     LIMIT 1`
+  );
+  if (!activeUnique || activeUnique.c === 0) {
+    // 清理已有的多条 active：仅保留最大 id 那条
+    await db.execute(`
+      UPDATE beat_license_templates SET is_active = 0
+      WHERE is_active = 1
+        AND id < (SELECT keep FROM (SELECT MAX(id) AS keep FROM beat_license_templates WHERE is_active = 1) t)
+    `);
+    await db.execute('ALTER TABLE beat_license_templates ADD UNIQUE KEY uk_beat_license_active_flag (active_flag_unique)');
+  }
+
   await db.execute(`
     CREATE TABLE IF NOT EXISTS play_events (
       id INT PRIMARY KEY AUTO_INCREMENT,
@@ -375,6 +477,43 @@ export async function initDatabase(
       CONSTRAINT fk_preview_history_beat FOREIGN KEY (beat_id) REFERENCES beats(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  // P0-A 加固：防止 preview_history 重复写入导致试听限额被多算。
+  // 登录态统一写入 device_id='LOGGED-IN' / ip_address=''，匿名态写入真实 device/ip，
+  // 以 (user_id, beat_id, preview_date, device_id, ip_address) 为复合唯一键。
+  const previewUniqueExists = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c
+       FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'preview_history'
+        AND INDEX_NAME = 'uk_preview_history_uniq'
+      LIMIT 1`
+  );
+  if (!previewUniqueExists || previewUniqueExists.c === 0) {
+    // 若仍存在 NULL，则先转成占位，确保 UNIQUE 对登录态生效
+    await db.execute(
+      "UPDATE preview_history SET device_id = 'LOGGED-IN', ip_address = '' " +
+      'WHERE device_id IS NULL AND ip_address IS NULL'
+    );
+    await db.execute('UPDATE preview_history SET device_id = IFNULL(device_id, "") WHERE device_id IS NULL');
+    await db.execute('UPDATE preview_history SET ip_address   = IFNULL(ip_address,  "") WHERE ip_address   IS NULL');
+    // 先删重复（保留 id 最小），再 ALTER ADD UNIQUE，保证老环境也能成功
+    await db.execute(`
+      DELETE t FROM preview_history t
+      LEFT JOIN (
+        SELECT MIN(id) keep_id
+          FROM preview_history
+         GROUP BY user_id, beat_id, preview_date,
+                  LEFT(IFNULL(device_id,''), 255),
+                  LEFT(IFNULL(ip_address,''), 45)
+      ) k ON t.id = k.keep_id
+      WHERE k.keep_id IS NULL
+    `);
+    await db.execute(
+      'ALTER TABLE preview_history ' +
+      'ADD UNIQUE KEY uk_preview_history_uniq ' +
+      '(user_id, beat_id, preview_date, device_id(255), ip_address(45))'
+    );
+  }
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS orders (
@@ -431,6 +570,65 @@ export async function initDatabase(
       INDEX idx_home_footer_faqs_sort (sort_order)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  // 防止 FAQ 重复插入：同一分类下不允许问题文案完全相同
+  const faqUniqueExists = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c
+     FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'home_footer_faqs'
+       AND INDEX_NAME = 'uk_home_footer_faqs_cat_question'
+     LIMIT 1`
+  );
+  if (!faqUniqueExists || faqUniqueExists.c === 0) {
+    await db.execute(
+      'ALTER TABLE home_footer_faqs ADD UNIQUE KEY uk_home_footer_faqs_cat_question (category, question(255))'
+    );
+  }
+
+  // ─── banners：禁止同名 banner（便于后台列表去重、防止重复上传） ────────────
+  const bannerNameUnique = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c
+     FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'banners'
+       AND INDEX_NAME = 'uk_banners_name'
+       AND NON_UNIQUE = 0
+     LIMIT 1`
+  );
+  if (!bannerNameUnique || bannerNameUnique.c === 0) {
+    // 先清理已有重复：按 name 分组只保留最小 id
+    await db.execute(`
+      DELETE t1 FROM banners t1
+      INNER JOIN banners t2
+        ON t1.name = t2.name AND t1.id > t2.id
+    `);
+    await db.execute('ALTER TABLE banners ADD UNIQUE KEY uk_banners_name (name)');
+  }
+
+  // ─── orders：升级 stripe_session_id 普通索引为 UNIQUE（去重时保留最小 id） ────
+  const ordersSessionUnique = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c
+     FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'orders'
+       AND INDEX_NAME = 'uk_orders_stripe_session_id'
+       AND NON_UNIQUE = 0
+     LIMIT 1`
+  );
+  if (!ordersSessionUnique || ordersSessionUnique.c === 0) {
+    // 若存在老的同名普通索引先 DROP；重复行按 stripe_session_id 保留最小 id（NULL 行全部保留，UNIQUE 允许多个 NULL）
+    try {
+      await db.execute('ALTER TABLE orders DROP INDEX idx_orders_session');
+    } catch (_e) { /* 忽略：可能不存在 */ }
+    await db.execute(`
+      DELETE t1 FROM orders t1
+      INNER JOIN orders t2
+        ON t1.stripe_session_id = t2.stripe_session_id
+       AND t1.stripe_session_id IS NOT NULL
+       AND t1.id > t2.id
+    `);
+    await db.execute('ALTER TABLE orders ADD UNIQUE KEY uk_orders_stripe_session_id (stripe_session_id)');
+  }
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS subscriptions (
@@ -582,6 +780,32 @@ async function initMembershipDatabase(membershipDb: import('./client.js').Databa
       INDEX idx_external (external_order_no)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  // vip_orders：升级 external_order_no 为 UNIQUE，防止同一外部订单重复入账
+  const vipOrdersExternalUnique = await membershipDb.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c
+     FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'vip_orders'
+       AND INDEX_NAME = 'uk_vip_orders_external_order_no'
+       AND NON_UNIQUE = 0
+     LIMIT 1`
+  );
+  if (!vipOrdersExternalUnique || vipOrdersExternalUnique.c === 0) {
+    try {
+      await membershipDb.execute('ALTER TABLE vip_orders DROP INDEX idx_external');
+    } catch (_e) { /* 忽略 */ }
+    await membershipDb.execute(`
+      DELETE t1 FROM vip_orders t1
+      INNER JOIN vip_orders t2
+        ON t1.external_order_no = t2.external_order_no
+       AND t1.external_order_no IS NOT NULL
+       AND t1.id > t2.id
+    `);
+    await membershipDb.execute(
+      'ALTER TABLE vip_orders ADD UNIQUE KEY uk_vip_orders_external_order_no (external_order_no)'
+    );
+  }
 
   // VIP 等级字典
   await membershipDb.execute(`
@@ -860,6 +1084,31 @@ async function initForumDatabase(forumDb: import('./client.js').DatabaseClient) 
       INDEX idx_notifications_user_unread (user_id, is_read) USING BTREE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  // P1-B 加固：同一接收者+事件类型+触发者+目标 只能有 1 条通知（点赞/评论不会出现两条一模一样的红点）
+  const notifUniqueExists = await forumDb.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'forum_notifications'
+        AND INDEX_NAME = 'uk_forum_notifications_dedup'`
+  );
+  if (!notifUniqueExists || notifUniqueExists.c === 0) {
+    // 老数据去重（保留最新 id），避免后续 ALTER UNIQUE 失败
+    await forumDb.execute(`
+      DELETE t FROM forum_notifications t
+      LEFT JOIN (
+        SELECT MAX(id) keep_id
+          FROM forum_notifications
+         GROUP BY user_id, type, actor_id,
+                  LEFT(IFNULL(target_type,''), 50),
+                  IFNULL(target_id, 0)
+      ) k ON t.id = k.keep_id
+      WHERE k.keep_id IS NULL
+    `);
+    await forumDb.execute(
+      'ALTER TABLE forum_notifications ADD UNIQUE KEY uk_forum_notifications_dedup ' +
+      '(user_id, type, actor_id, target_type(50), target_id)'
+    );
+  }
 
   // Remove "综合" (general) category if exists and migrate its posts
   try {

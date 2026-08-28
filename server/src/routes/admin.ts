@@ -418,10 +418,17 @@ router.put('/admin/license-templates/:id', requireAdmin, async (req: AuthRequest
     await database.execute('UPDATE beat_license_templates SET is_active = 0');
   }
 
-  await database.execute(
-    'UPDATE beat_license_templates SET version = COALESCE(?, version), content = COALESCE(?, content), is_active = COALESCE(?, is_active), updated_at = NOW() WHERE id = ?',
-    [version ?? null, content ?? null, is_active ?? null, req.params.id]
-  );
+  try {
+    await database.execute(
+      'UPDATE beat_license_templates SET version = COALESCE(?, version), content = COALESCE(?, content), is_active = COALESCE(?, is_active), updated_at = NOW() WHERE id = ?',
+      [version ?? null, content ?? null, is_active ?? null, req.params.id]
+    );
+  } catch (err: any) {
+    if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+      return res.status(409).json({ error: '仅允许存在 1 个启用的协议模板，请先停用其他模板后再执行此操作' });
+    }
+    throw err;
+  }
 
   const updated = await database.queryOne(
     'SELECT id, version, content, is_active, created_at, updated_at FROM beat_license_templates WHERE id = ?',
@@ -443,10 +450,17 @@ router.post('/admin/license-templates', requireAdmin, async (req: AuthRequest, r
     await database.execute('UPDATE beat_license_templates SET is_active = 0');
   }
 
-  await database.execute(
-    'INSERT INTO beat_license_templates (version, content, is_active) VALUES (?, ?, ?)',
-    [version ?? '1.0', content ?? '', is_active ?? 0]
-  );
+  try {
+    await database.execute(
+      'INSERT INTO beat_license_templates (version, content, is_active) VALUES (?, ?, ?)',
+      [version ?? '1.0', content ?? '', is_active ?? 0]
+    );
+  } catch (err: any) {
+    if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+      return res.status(409).json({ error: '仅允许存在 1 个启用的协议模板，请先停用其他模板后再执行此操作' });
+    }
+    throw err;
+  }
 
   const template = await database.queryOne(
     'SELECT id, version, content, is_active, created_at, updated_at FROM beat_license_templates WHERE id = LAST_INSERT_ID()'

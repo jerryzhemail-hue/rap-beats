@@ -29,9 +29,12 @@ export async function createNotification(
 
   const result = await db.execute(
     `INSERT INTO forum_notifications (user_id, type, actor_id, target_type, target_id, target_title)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), is_read = 0, created_at = CURRENT_TIMESTAMP`,
     [userId, type, actorId, targetType ?? null, targetId ?? null, targetTitle ?? null]
   );
+  const affectedRows = Number(result.affectedRows) || 0;
+  if (affectedRows !== 1 && affectedRows !== 2) return; // 幂等：未插入也未更新则跳过推送
 
   const actorInfo = await mainDb.queryOne<{ username: string; avatar_url: string }>(
     'SELECT username, avatar_url FROM users WHERE id = ?',

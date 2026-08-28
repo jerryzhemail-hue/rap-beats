@@ -102,10 +102,18 @@ router.post('/forum/messages/conversations', requireAuth, async (req: AuthReques
   );
 
   if (!conversation) {
-    await db.execute(
-      'INSERT INTO forum_conversations (id, participant_a, participant_b, last_message_content, last_message_at) VALUES (?, ?, ?, ?, NOW())',
-      [conversationId, Math.min(currentUserId, receiver_id), Math.max(currentUserId, receiver_id), '']
-    );
+    try {
+      await db.execute(
+        'INSERT INTO forum_conversations (id, participant_a, participant_b, last_message_content, last_message_at) VALUES (?, ?, ?, ?, NOW())',
+        [conversationId, Math.min(currentUserId, receiver_id), Math.max(currentUserId, receiver_id), '']
+      );
+    } catch (err: any) {
+      if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+        // 并发下另一请求先创建会话；直接 SELECT 获取当前行即可
+      } else {
+        throw err;
+      }
+    }
     conversation = await db.queryOne<ForumConversationRow>(
       'SELECT * FROM forum_conversations WHERE id = ?',
       [conversationId]
@@ -298,10 +306,22 @@ router.post('/forum/messages', requireAuth, messageLimiter, async (req: AuthRequ
   );
 
   if (!conversation) {
-    await db.execute(
-      'INSERT INTO forum_conversations (id, participant_a, participant_b, last_message_content, last_message_at) VALUES (?, ?, ?, ?, NOW())',
-      [conversationId, Math.min(senderId, receiver_id), Math.max(senderId, receiver_id), content.slice(0, 200)]
-    );
+    try {
+      await db.execute(
+        'INSERT INTO forum_conversations (id, participant_a, participant_b, last_message_content, last_message_at) VALUES (?, ?, ?, ?, NOW())',
+        [conversationId, Math.min(senderId, receiver_id), Math.max(senderId, receiver_id), content.slice(0, 200)]
+      );
+    } catch (err: any) {
+      if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+        // 并发冲突：另一线程已创建，UPDATE 写入本次消息作为 last_message 保持一致
+        await db.execute(
+          'UPDATE forum_conversations SET last_message_content = ?, last_message_at = NOW() WHERE id = ?',
+          [content.slice(0, 200), conversationId]
+        );
+      } else {
+        throw err;
+      }
+    }
     conversation = await db.queryOne<ForumConversationRow>(
       'SELECT * FROM forum_conversations WHERE id = ?',
       [conversationId]

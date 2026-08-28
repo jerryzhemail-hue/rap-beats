@@ -262,19 +262,24 @@ router.post('/', requireAdmin, async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  const result = await db.execute(
-    'INSERT INTO rappers (name, avatar_url, bio, sort_order) VALUES (?, ?, ?, ?)',
-    [trimmedName, avatar_url || null, bio || null, sort_order || 0]
-  );
-
-  const insertId = (result as any).insertId;
-
-  const newRapper = await db.queryOne<Rapper>(
-    'SELECT * FROM rappers WHERE id = ?',
-    [insertId]
-  );
-
-  res.status(201).json({ rapper: { ...newRapper, count: 0 } });
+  try {
+    const result = await db.execute(
+      'INSERT INTO rappers (name, avatar_url, bio, sort_order) VALUES (?, ?, ?, ?)',
+      [trimmedName, avatar_url || null, bio || null, sort_order || 0]
+    );
+    const insertId = (result as any).insertId;
+    const newRapper = await db.queryOne<Rapper>(
+      'SELECT * FROM rappers WHERE id = ?',
+      [insertId]
+    );
+    res.status(201).json({ rapper: { ...newRapper, count: 0 } });
+  } catch (error: any) {
+    // 并发下 SELECT-then-INSERT 之间另一请求先插入：UNIQUE(name) 报 ER_DUP_ENTRY，转成 409
+    if (error?.code === 'ER_DUP_ENTRY' || Number(error?.errno) === 1062) {
+      return res.status(409).json({ error: `制作人「${trimmedName}」已存在，请勿重复创建` });
+    }
+    throw error;
+  }
 });
 
 // PUT /api/rappers/:id - 更新 rapper
@@ -287,40 +292,30 @@ router.put('/:id', requireAdmin, async (req: AuthRequest, res: Response) => {
     'SELECT * FROM rappers WHERE id = ?',
     [id]
   );
-
   if (!existing) {
     res.status(404).json({ error: 'Rapper not found' });
     return;
   }
 
-  if (name && name.trim() !== existing.name) {
-    const conflict = await db.queryOne<{ id: number }>(
-      'SELECT id FROM rappers WHERE name = ? AND id != ?',
-      [name.trim(), id]
-    );
-
-    if (conflict) {
-      res.status(409).json({ error: 'Rapper name already exists' });
-      return;
-    }
-
+  const trimmedName = typeof name === 'string' && name.trim() !== '' ? name.trim() : existing.name;
+  try {
     await db.execute(
-      'UPDATE beats SET rapper = ? WHERE rapper = ?',
-      [name.trim(), existing.name]
+      'UPDATE rappers SET name = ?, avatar_url = COALESCE(?, avatar_url), bio = COALESCE(?, bio), sort_order = COALESCE(?, sort_order) WHERE id = ?',
+      [trimmedName, avatar_url ?? null, bio ?? null, sort_order ?? null, id]
     );
+  } catch (error: any) {
+    if (error?.code === 'ER_DUP_ENTRY' || Number(error?.errno) === 1062) {
+      return res.status(409).json({ error: `制作人「${trimmedName}」已存在，无法重命名为该名称` });
+    }
+    throw error;
   }
 
-  await db.execute(
-    'UPDATE rappers SET name = ?, avatar_url = ?, bio = ?, sort_order = ? WHERE id = ?',
-    [name?.trim() || existing.name, avatar_url !== undefined ? avatar_url : existing.avatar_url, bio !== undefined ? bio : existing.bio, sort_order !== undefined ? sort_order : existing.sort_order, id]
-  );
-
-  const updated = await db.queryOne<Rapper>(
-    'SELECT * FROM rappers WHERE id = ?',
+  const updated = await db.queryOne<Rapper>('SELECT * FROM rappers WHERE id = ?', [id]);
+  const count = await db.queryOne<{ count: number }>(
+    'SELECT COUNT(*) as count FROM beat_producers WHERE rapper_id = ?',
     [id]
   );
-
-  res.json({ rapper: updated });
+  res.json({ rapper: { ...updated, count: count?.count ?? 0 } });
 });
 
 // DELETE /api/rappers/:id - 删除 rapper

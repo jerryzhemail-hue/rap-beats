@@ -1,52 +1,17 @@
 import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import multer from 'multer';
-import { initDatabase, getDatabaseClient, getForumDatabaseClient, getMembershipDatabaseClient, initMySqlDatabaseClientFromEnv } from './database/index.js';
+import { buildApp } from './app.js';
+import {
+  initDatabase,
+  getDatabaseClient,
+  getForumDatabaseClient,
+  getMembershipDatabaseClient,
+  initMySqlDatabaseClientFromEnv,
+} from './database/index.js';
 import { initStorage } from './services/storage.js';
-import beatsRouter from './routes/beats.js';
-import rappersRouter from './routes/rappers.js';
-import authRouter from './routes/auth.js';
-import uploadRouter from './routes/upload.js';
-import favoritesRouter from './routes/favorites.js';
-import commentsRouter from './routes/comments.js';
-import userRouter from './routes/user.js';
-import adminRouter from './routes/admin.js';
-import paymentRouter from './routes/payment.js';
-import bannersRouter from './routes/banners.js';
-import previewRouter from './routes/preview.js';
-import forumRouter from './routes/forum.js';
-import feedbackRouter from './routes/feedback.js';
-import beatmakerRouter from './routes/beatmaker.js';
-import adminBeatmakerRouter from './routes/admin-beatmaker.js';
-import homeFooterRouter from './routes/home-footer.js';
+import multer from 'multer';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const app = express();
+const app = buildApp();
 const PORT = 3000;
-
-app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
-  credentials: true,
-}));
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Static file serving
-initStorage();
-app.use('/audio', express.static(path.join(__dirname, '../data/audio')));
-app.use('/covers', express.static(path.join(__dirname, '../data/covers')));
-app.use('/avatars', express.static(path.join(__dirname, '../data/avatars')));
-app.use('/banners', express.static(path.join(__dirname, '../data/banners')));
-// 论坛图片和音频分开存储（保留 /forum 兼容旧数据）
-app.use('/forum-images', express.static(path.join(__dirname, '../data/forum-images')));
-app.use('/forum-audio', express.static(path.join(__dirname, '../data/forum-audio')));
-app.use('/forum', express.static(path.join(__dirname, '../data/forum')));
 
 // 健康检查（Docker 健康检查 & 负载均衡探活）
 app.get('/api/health', async (_req, res) => {
@@ -57,10 +22,9 @@ app.get('/api/health', async (_req, res) => {
   } = {
     status: 'ok',
     timestamp: new Date().toISOString(),
-    services: {}
+    services: {},
   };
 
-  // 检查数据库连接
   try {
     const db = getDatabaseClient();
     await db.queryOne('SELECT 1');
@@ -70,7 +34,6 @@ app.get('/api/health', async (_req, res) => {
     health.services.database = { status: 'error', message: err.message };
   }
 
-  // 检查论坛数据库连接
   try {
     const forumDb = getForumDatabaseClient();
     await forumDb.queryOne('SELECT 1');
@@ -87,6 +50,46 @@ app.get('/api/health', async (_req, res) => {
 async function startServer() {
   initMySqlDatabaseClientFromEnv();
   await initDatabase(getDatabaseClient(), getForumDatabaseClient(), getMembershipDatabaseClient());
+
+  // 初始化存储
+  initStorage();
+
+  // 动态 import 路由以避免循环依赖
+  const [
+    { default: beatsRouter },
+    { default: rappersRouter },
+    { default: authRouter },
+    { default: uploadRouter },
+    { default: favoritesRouter },
+    { default: commentsRouter },
+    { default: userRouter },
+    { default: adminRouter },
+    { default: paymentRouter },
+    { default: bannersRouter },
+    { default: previewRouter },
+    { default: forumRouter },
+    { default: feedbackRouter },
+    { default: beatmakerRouter },
+    { default: adminBeatmakerRouter },
+    { default: homeFooterRouter },
+  ] = await Promise.all([
+    import('./routes/beats.js'),
+    import('./routes/rappers.js'),
+    import('./routes/auth.js'),
+    import('./routes/upload.js'),
+    import('./routes/favorites.js'),
+    import('./routes/comments.js'),
+    import('./routes/user.js'),
+    import('./routes/admin.js'),
+    import('./routes/payment.js'),
+    import('./routes/banners.js'),
+    import('./routes/preview.js'),
+    import('./routes/forum.js'),
+    import('./routes/feedback.js'),
+    import('./routes/beatmaker.js'),
+    import('./routes/admin-beatmaker.js'),
+    import('./routes/home-footer.js'),
+  ]);
 
   app.use('/api', beatsRouter);
   app.use('/api/rappers', rappersRouter);
@@ -105,22 +108,20 @@ async function startServer() {
   app.use('/api', feedbackRouter);
   app.use('/api', homeFooterRouter);
 
-  // Multer 文件校验错误 → 400（必须注册在 500 兜底之前）
-  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  // Multer 文件校验错误 → 400
+  app.use((err: any, _req: any, res: any, next: any) => {
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ error: '文件大小超过限制（最大50MB）' });
       }
       return res.status(400).json({ error: err.message });
     }
-    if (err) {
-      return res.status(400).json({ error: err.message });
-    }
+    if (err) return res.status(400).json({ error: err.message });
     next();
   });
 
-  // 全局错误兜底：所有未捕获的 5xx 错误统一返回通用信息，不暴露内部细节
-  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  // 全局错误兜底
+  app.use((err: any, _req: any, res: any, _next: any) => {
     console.error('[Server Error]', err?.message ?? err);
     res.status(500).json({ error: '服务器内部错误，请稍后再试' });
   });

@@ -50,12 +50,18 @@ async function createNotification(
   // 不给自己发通知
   if (userId === actorId) return;
 
-  // 插入通知记录
+  // 幂等写入：复合唯一键 (user_id, type, actor_id, target_type(50), target_id)
+  // 命中时 UPDATE is_read=0 会让已读的同目标通知重新变成未读（用户体验合理），
+  // 同时 LAST_INSERT_ID(id) 保持 insertId 可用。
   const result = await db.execute(
     `INSERT INTO forum_notifications (user_id, type, actor_id, target_type, target_id, target_title)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), is_read = 0, created_at = CURRENT_TIMESTAMP`,
     [userId, type, actorId, targetType ?? null, targetId ?? null, targetTitle ?? null]
   );
+  const affectedRows = Number(result.affectedRows) || 0;
+  // 1 = 真插入新通知；2 = 命中 UNIQUE 并做了 UPDATE → 两种都要推 SSE
+  if (affectedRows !== 1 && affectedRows !== 2) return;
 
   // 获取发送者信息用于实时推送
   const actorInfo = await mainDb.queryOne<{ username: string; avatar_url: string }>(
@@ -71,7 +77,7 @@ async function createNotification(
 
   // 实时推送 SSE 事件
   pushToUser(userId, 'notification', {
-    id: (result as any).insertId,
+    id: result.insertId ?? (result as any).insertId,
     type,
     actor_id: actorId,
     actor_username: actorInfo?.username,

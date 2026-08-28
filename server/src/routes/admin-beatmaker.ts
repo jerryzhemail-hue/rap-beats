@@ -86,7 +86,7 @@ router.get('/', requireAdmin, async (req: AuthRequest, res: Response) => {
 // 单条详情（含加密身份证号，仅用于审计）
 router.get('/:id', requireAdmin, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (!id || isNaN(id)) return res.status(400).json({ error: '无效的 id' });
 
   const row = await database.queryOne(
@@ -105,7 +105,7 @@ router.get('/:id', requireAdmin, async (req: AuthRequest, res: Response) => {
 // 通过 → 写入 users.is_beatmaker=1 + beatmaker_profiles
 router.post('/:id/approve', requireAdmin, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (!id || isNaN(id)) return res.status(400).json({ error: '无效的 id' });
   const reviewerId = req.user!.id;
 
@@ -158,7 +158,7 @@ router.post('/:id/approve', requireAdmin, async (req: AuthRequest, res: Response
 // 拒绝
 router.post('/:id/reject', requireAdmin, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
-  const id = parseInt(req.params.id, 10);
+  const id = parseInt(req.params.id as string, 10);
   if (!id || isNaN(id)) return res.status(400).json({ error: '无效的 id' });
   const reviewerId = req.user!.id;
   const { reject_reason } = req.body ?? {};

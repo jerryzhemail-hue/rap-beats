@@ -633,10 +633,23 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
     }
   }
 
-  // Increment download count
-  await database.execute('UPDATE beats SET download_count = download_count + 1 WHERE id = ?', [beat.id]);
-  // Record download log
-  await database.execute('INSERT INTO downloads (user_id, beat_id) VALUES (?, ?)', [req.user!.id, beat.id]);
+  // Record download log (幂等：UNIQUE(user_id, beat_id, created_date) 命中时静默 IODKU 不抛错)
+  const logResult = await database.execute(
+    `INSERT INTO downloads (user_id, beat_id) VALUES (?, ?)
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
+    [req.user!.id, beat.id]
+  );
+  // MySQL INSERT … ON DUPLICATE KEY UPDATE affected_rows 语义：
+  //   - 真插入新行 = 1 → 今天首次下载 → 计数器 +1
+  //   - 命中 UNIQUE / 纯 UPDATE 无变化 = 2 → 重复下载 → 不重复计次
+  const isFirstDownloadToday = Number(logResult.affectedRows) === 1;
+  if (isFirstDownloadToday) {
+    // Increment download count (只有首次下载才累加)
+    await database.execute(
+      'UPDATE beats SET download_count = download_count + 1 WHERE id = ?',
+      [beat.id]
+    );
+  }
 
   // 自动更新关联 rapper 的权重
   if (beat.rapper) {

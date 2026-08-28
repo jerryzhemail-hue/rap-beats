@@ -289,29 +289,41 @@ router.post('/forum/posts/:id/like', likeLimiter, requireAuth, async (req: AuthR
       await db.execute('UPDATE forum_posts SET like_count = GREATEST(0, like_count - 1) WHERE id = ?', [id]);
       const post = await db.queryOne<{ like_count: number }>('SELECT like_count FROM forum_posts WHERE id = ?', [id]);
       return res.json({ liked: false, like_count: post?.like_count ?? 0 });
-    } else {
+    }
+
+    try {
       await db.execute('INSERT INTO forum_likes (user_id, post_id) VALUES (?, ?)', [userId, id]);
-      await db.execute('UPDATE forum_posts SET like_count = like_count + 1 WHERE id = ?', [id]);
-      const post = await db.queryOne<{ like_count: number; user_id: number }>('SELECT like_count, user_id FROM forum_posts WHERE id = ?', [id]);
+    } catch (insertErr: any) {
+      // 并发：SELECT 与 INSERT 间隙另一请求先完成（已插入），此时 UNIQUE 报 1062，视为“已存在→取消点赞”语义
+      if (insertErr?.code === 'ER_DUP_ENTRY' || Number(insertErr?.errno) === 1062) {
+        await db.execute('DELETE FROM forum_likes WHERE user_id = ? AND post_id = ?', [userId, id]);
+        await db.execute('UPDATE forum_posts SET like_count = GREATEST(0, like_count - 1) WHERE id = ?', [id]);
+        const post = await db.queryOne<{ like_count: number }>('SELECT like_count FROM forum_posts WHERE id = ?', [id]);
+        return res.json({ liked: false, like_count: post?.like_count ?? 0 });
+      }
+      throw insertErr;
+    }
 
-      // Phase 2: 帖子被点赞，给作者积分奖励（不能给自己点赞）
-      if (post && post.user_id !== userId) {
-        const availablePoints = await getAvailableReward(post.user_id, 'post_liked', POINT_REWARDS.post_liked);
-        if (availablePoints > 0) {
-          await changePoints({
-            userId: post.user_id,
-            amount: availablePoints,
-            reason: 'post_liked',
-            description: `帖子被点赞奖励 ${availablePoints} 积分`,
-          });
-        }
+    await db.execute('UPDATE forum_posts SET like_count = like_count + 1 WHERE id = ?', [id]);
+    const post = await db.queryOne<{ like_count: number; user_id: number }>('SELECT like_count, user_id FROM forum_posts WHERE id = ?', [id]);
 
-        // 发送点赞通知
-        await createNotification(post.user_id, 'like_post', userId, 'post', parseInt(id as string));
+    // Phase 2: 帖子被点赞，给作者积分奖励（不能给自己点赞）
+    if (post && post.user_id !== userId) {
+      const availablePoints = await getAvailableReward(post.user_id, 'post_liked', POINT_REWARDS.post_liked);
+      if (availablePoints > 0) {
+        await changePoints({
+          userId: post.user_id,
+          amount: availablePoints,
+          reason: 'post_liked',
+          description: `帖子被点赞奖励 ${availablePoints} 积分`,
+        });
       }
 
-      return res.json({ liked: true, like_count: post?.like_count ?? 0 });
+      // 发送点赞通知
+      await createNotification(post.user_id, 'like_post', userId, 'post', parseInt(id as string));
     }
+
+    return res.json({ liked: true, like_count: post?.like_count ?? 0 });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -336,24 +348,33 @@ router.post('/forum/posts/:id/favorite', likeLimiter, requireAuth, async (req: A
     if (existing) {
       await db.execute('DELETE FROM forum_favorites WHERE user_id = ? AND post_id = ?', [userId, id]);
       return res.json({ favorited: false });
-    } else {
-      await db.execute('INSERT INTO forum_favorites (user_id, post_id) VALUES (?, ?)', [userId, id]);
-
-      // Phase 2: 帖子被收藏，给作者积分奖励（不能给自己收藏）
-      if (post.user_id !== userId) {
-        const availablePoints = await getAvailableReward(post.user_id, 'post_favorited', POINT_REWARDS.post_favorited);
-        if (availablePoints > 0) {
-          await changePoints({
-            userId: post.user_id,
-            amount: availablePoints,
-            reason: 'post_favorited',
-            description: `帖子被收藏奖励 ${availablePoints} 积分`,
-          });
-        }
-      }
-
-      return res.json({ favorited: true });
     }
+
+    try {
+      await db.execute('INSERT INTO forum_favorites (user_id, post_id) VALUES (?, ?)', [userId, id]);
+    } catch (insertErr: any) {
+      // 并发冲突：另一请求先收藏，这里幂等切换到取消
+      if (insertErr?.code === 'ER_DUP_ENTRY' || Number(insertErr?.errno) === 1062) {
+        await db.execute('DELETE FROM forum_favorites WHERE user_id = ? AND post_id = ?', [userId, id]);
+        return res.json({ favorited: false });
+      }
+      throw insertErr;
+    }
+
+    // Phase 2: 帖子被收藏，给作者积分奖励（不能给自己收藏）
+    if (post.user_id !== userId) {
+      const availablePoints = await getAvailableReward(post.user_id, 'post_favorited', POINT_REWARDS.post_favorited);
+      if (availablePoints > 0) {
+        await changePoints({
+          userId: post.user_id,
+          amount: availablePoints,
+          reason: 'post_favorited',
+          description: `帖子被收藏奖励 ${availablePoints} 积分`,
+        });
+      }
+    }
+
+    return res.json({ favorited: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -620,32 +641,43 @@ router.post('/forum/comments/:id/like', likeLimiter, requireAuth, async (req: Au
       await db.execute('UPDATE forum_comments SET like_count = GREATEST(0, like_count - 1) WHERE id = ?', [id]);
       const updated = await db.queryOne<{ like_count: number }>('SELECT like_count FROM forum_comments WHERE id = ?', [id]);
       return res.json({ liked: false, like_count: updated?.like_count ?? 0 });
-    } else {
-      // 点赞
+    }
+
+    // 点赞（并发下若被 UNIQUE 拦截 → 视为切换语义：取消点赞）
+    try {
       await db.execute('INSERT INTO forum_comment_likes (user_id, comment_id) VALUES (?, ?)', [userId, id]);
-      await db.execute('UPDATE forum_comments SET like_count = like_count + 1 WHERE id = ?', [id]);
-      const updated = await db.queryOne<{ like_count: number; user_id: number }>(
-        'SELECT like_count, user_id FROM forum_comments WHERE id = ?', [id]
-      );
+    } catch (insertErr: any) {
+      if (insertErr?.code === 'ER_DUP_ENTRY' || Number(insertErr?.errno) === 1062) {
+        await db.execute('DELETE FROM forum_comment_likes WHERE user_id = ? AND comment_id = ?', [userId, id]);
+        await db.execute('UPDATE forum_comments SET like_count = GREATEST(0, like_count - 1) WHERE id = ?', [id]);
+        const updated = await db.queryOne<{ like_count: number }>('SELECT like_count FROM forum_comments WHERE id = ?', [id]);
+        return res.json({ liked: false, like_count: updated?.like_count ?? 0 });
+      }
+      throw insertErr;
+    }
 
-      // Phase 2: 评论被点赞，给作者积分奖励（不能给自己点赞）
-      if (updated && updated.user_id !== userId) {
-        const availablePoints = await getAvailableReward(updated.user_id, 'comment_liked', POINT_REWARDS.comment_liked);
-        if (availablePoints > 0) {
-          await changePoints({
-            userId: updated.user_id,
-            amount: availablePoints,
-            reason: 'comment_liked',
-            description: `评论被点赞奖励 ${availablePoints} 积分`,
-          });
-        }
+    await db.execute('UPDATE forum_comments SET like_count = like_count + 1 WHERE id = ?', [id]);
+    const updated = await db.queryOne<{ like_count: number; user_id: number }>(
+      'SELECT like_count, user_id FROM forum_comments WHERE id = ?', [id]
+    );
 
-        // 发送评论点赞通知
-        await createNotification(updated.user_id, 'like_comment', userId, 'comment', parseInt(id as string));
+    // Phase 2: 评论被点赞，给作者积分奖励（不能给自己点赞）
+    if (updated && updated.user_id !== userId) {
+      const availablePoints = await getAvailableReward(updated.user_id, 'comment_liked', POINT_REWARDS.comment_liked);
+      if (availablePoints > 0) {
+        await changePoints({
+          userId: updated.user_id,
+          amount: availablePoints,
+          reason: 'comment_liked',
+          description: `评论被点赞奖励 ${availablePoints} 积分`,
+        });
       }
 
-      return res.json({ liked: true, like_count: updated?.like_count ?? 0 });
+      // 发送评论点赞通知
+      await createNotification(updated.user_id, 'like_comment', userId, 'comment', parseInt(id as string));
     }
+
+    return res.json({ liked: true, like_count: updated?.like_count ?? 0 });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

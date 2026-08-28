@@ -179,29 +179,36 @@ router.post('/admin/banners', requireAdmin, async (req: AuthRequest, res) => {
   }
 
   const { name, image_url, link_url, sort_order, is_active, overlay_opacity, display_duration } = normalized.data;
-  const result = await database.execute(
-    `
-      INSERT INTO banners (name, image_url, link_url, sort_order, is_active, overlay_opacity, display_duration)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `,
-    [name, image_url, link_url, sort_order, is_active ? 1 : 0, overlay_opacity, display_duration]
-  );
+  try {
+    const result = await database.execute(
+      `
+        INSERT INTO banners (name, image_url, link_url, sort_order, is_active, overlay_opacity, display_duration)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      [name, image_url, link_url, sort_order, is_active ? 1 : 0, overlay_opacity, display_duration]
+    );
 
-  const banner = result.insertId
-    ? await database.queryOne<BannerRow>(
-        `
-          SELECT id, name, image_url, link_url, sort_order, is_active, overlay_opacity, display_duration, created_at, updated_at
-          FROM banners
-          WHERE id = ?
-        `,
-        [result.insertId]
-      )
-    : null;
+    const banner = result.insertId
+      ? await database.queryOne<BannerRow>(
+          `
+            SELECT id, name, image_url, link_url, sort_order, is_active, overlay_opacity, display_duration, created_at, updated_at
+            FROM banners
+            WHERE id = ?
+          `,
+          [result.insertId]
+        )
+      : null;
 
-  res.status(201).json({
-    message: 'Banner 创建成功',
-    banner: banner ? toBannerResponse(banner) : { id: result.insertId }
-  });
+    res.status(201).json({
+      message: 'Banner 创建成功',
+      banner: banner ? toBannerResponse(banner) : { id: result.insertId }
+    });
+  } catch (err: any) {
+    if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+      return res.status(409).json({ error: `Banner 名称「${String(name)}」已存在，请勿重复创建` });
+    }
+    throw err;
+  }
 });
 
 router.post('/admin/banners/reorder', requireAdmin, async (req: AuthRequest, res) => {
@@ -262,23 +269,30 @@ router.put('/admin/banners/:id', requireAdmin, async (req: AuthRequest, res) => 
     return res.status(400).json({ error: '请先上传 Banner 背景图' });
   }
 
-  await database.execute(
-    `
-      UPDATE banners
-      SET name = ?, image_url = ?, link_url = ?, sort_order = ?, is_active = ?, overlay_opacity = ?, display_duration = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `,
-    [
-      normalized.data.name,
-      nextImageUrl,
-      normalized.data.link_url,
-      normalized.data.sort_order,
-      normalized.data.is_active ? 1 : 0,
-      normalized.data.overlay_opacity,
-      normalized.data.display_duration,
-      bannerId
-    ]
-  );
+  try {
+    await database.execute(
+      `
+        UPDATE banners
+        SET name = ?, image_url = ?, link_url = ?, sort_order = ?, is_active = ?, overlay_opacity = ?, display_duration = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `,
+      [
+        normalized.data.name,
+        nextImageUrl,
+        normalized.data.link_url,
+        normalized.data.sort_order,
+        normalized.data.is_active ? 1 : 0,
+        normalized.data.overlay_opacity,
+        normalized.data.display_duration,
+        bannerId
+      ]
+    );
+  } catch (err: any) {
+    if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+      return res.status(409).json({ error: `Banner 名称「${String(normalized.data.name)}」已存在，无法重命名为该名称` });
+    }
+    throw err;
+  }
 
   if (existing.image_url && nextImageUrl !== existing.image_url) {
     await deleteStoredAsset('banner', existing.image_url);

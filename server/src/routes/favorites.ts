@@ -28,12 +28,15 @@ router.post('/favorites/:beatId', requireAuth, rateLimitMiddleware('favorites', 
     
     res.status(201).json({ message: '收藏成功' });
   } catch (e: any) {
+    if (e?.code === 'ER_DUP_ENTRY' || Number(e?.errno) === 1062) {
+      return res.json({ message: '已收藏' });
+    }
     const message = String(e?.message || '');
     if (message.includes('UNIQUE constraint') || message.includes('Duplicate entry')) {
-      res.json({ message: '已收藏' });
-    } else {
-      res.status(500).json({ error: '操作失败' });
+      return res.json({ message: '已收藏' });
     }
+    console.error('Failed to create favorite:', e);
+    res.status(500).json({ error: '操作失败' });
   }
 });
 

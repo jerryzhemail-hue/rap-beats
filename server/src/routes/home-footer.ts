@@ -349,20 +349,30 @@ router.put('/admin/home-footer/config', requireAdmin, async (req: AuthRequest, r
   res.json({ config });
 });
 
+/** MySQL 唯一键错误码：ER_DUP_ENTRY */
+const MYSQL_DUP_ENTRY = 1062;
+
 router.post('/admin/home-footer/faqs', requireAdmin, async (req: AuthRequest, res) => {
   const db = getDatabaseClient();
   const faq = normalizeFaq(req.body);
   if (!faq) return res.status(400).json({ error: '请填写问题和答案' });
 
-  const result = await db.execute(
-    'INSERT INTO home_footer_faqs (category, question, answer, sort_order, is_active) VALUES (?, ?, ?, ?, ?)',
-    [faq.category, faq.question, faq.answer, faq.sort_order, faq.is_active]
-  );
-  const created = await db.queryOne(
-    'SELECT id, category, question, answer, sort_order, is_active, created_at, updated_at FROM home_footer_faqs WHERE id = ?',
-    [result.insertId]
-  );
-  res.status(201).json({ faq: created });
+  try {
+    const result = await db.execute(
+      'INSERT INTO home_footer_faqs (category, question, answer, sort_order, is_active) VALUES (?, ?, ?, ?, ?)',
+      [faq.category, faq.question, faq.answer, faq.sort_order, faq.is_active]
+    );
+    const created = await db.queryOne(
+      'SELECT id, category, question, answer, sort_order, is_active, created_at, updated_at FROM home_footer_faqs WHERE id = ?',
+      [result.insertId]
+    );
+    res.status(201).json({ faq: created });
+  } catch (error: any) {
+    if (error?.code === 'ER_DUP_ENTRY' || Number(error?.errno) === MYSQL_DUP_ENTRY) {
+      return res.status(409).json({ error: `分类「${faq.category}」下已存在相同问题「${faq.question}」，请修改后再保存` });
+    }
+    throw error;
+  }
 });
 
 router.put('/admin/home-footer/faqs/:id', requireAdmin, async (req: AuthRequest, res) => {
@@ -373,10 +383,17 @@ router.put('/admin/home-footer/faqs/:id', requireAdmin, async (req: AuthRequest,
   const existing = await db.queryOne<{ id: number }>('SELECT id FROM home_footer_faqs WHERE id = ?', [req.params.id]);
   if (!existing) return res.status(404).json({ error: 'FAQ 不存在' });
 
-  await db.execute(
-    'UPDATE home_footer_faqs SET category = ?, question = ?, answer = ?, sort_order = ?, is_active = ?, updated_at = NOW() WHERE id = ?',
-    [faq.category, faq.question, faq.answer, faq.sort_order, faq.is_active, req.params.id]
-  );
+  try {
+    await db.execute(
+      'UPDATE home_footer_faqs SET category = ?, question = ?, answer = ?, sort_order = ?, is_active = ?, updated_at = NOW() WHERE id = ?',
+      [faq.category, faq.question, faq.answer, faq.sort_order, faq.is_active, req.params.id]
+    );
+  } catch (error: any) {
+    if (error?.code === 'ER_DUP_ENTRY' || Number(error?.errno) === MYSQL_DUP_ENTRY) {
+      return res.status(409).json({ error: `分类「${faq.category}」下已存在相同问题「${faq.question}」，请修改后再保存` });
+    }
+    throw error;
+  }
   const updated = await db.queryOne(
     'SELECT id, category, question, answer, sort_order, is_active, created_at, updated_at FROM home_footer_faqs WHERE id = ?',
     [req.params.id]

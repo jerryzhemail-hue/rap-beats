@@ -195,20 +195,26 @@ export async function recordPreviewAccess(
   const today = getLocalDateString();
   const database = getDatabaseClient();
 
-  // deviceId/ipAddress 仅用于未登录用户（匿名用户）
+  // deviceId/ipAddress 仅用于未登录用户（匿名用户）。
+  // UNIQUE(user_id, beat_id, preview_date, device_id(255), ip_address(45)) 会同时覆盖两条链路的幂等写入；
+  // 命中唯一键时静默 IODKU，不抛异常、不新增重复行。
   if (deviceId && (userId === 0 || userId === ANONYMOUS_USER_ID)) {
     const anonId = await resolveAnonymousUserId();
     if (anonId === null) return; // 匿名用户记录不存在，静默跳过
     await database.execute(
       `INSERT INTO preview_history (user_id, beat_id, preview_date, device_id, ip_address)
-       VALUES (?, ?, ?, ?, ?)`,
-      [anonId, beatId, today, deviceId, ipAddress || null]
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
+      [anonId, beatId, today, deviceId, ipAddress ?? '']
     );
     return;
   }
 
+  // 登录态：device/ip 用固定占位符填充，保证 UNIQUE(user,beat,date,'LOGGED-IN','') 命中
   await database.execute(
-    'INSERT INTO preview_history (user_id, beat_id, preview_date) VALUES (?, ?, ?)',
+    `INSERT INTO preview_history (user_id, beat_id, preview_date, device_id, ip_address)
+     VALUES (?, ?, ?, 'LOGGED-IN', '')
+     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
     [userId, beatId, today]
   );
 }

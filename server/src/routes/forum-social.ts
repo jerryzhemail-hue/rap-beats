@@ -26,10 +26,17 @@ router.post('/forum/blocks/:userId', requireAuth, async (req: AuthRequest, res) 
     return res.json({ success: true, already: true });
   }
 
-  await db.execute(
-    'INSERT INTO forum_blocks (user_id, blocked_user_id) VALUES (?, ?)',
-    [userId, targetId]
-  );
+  try {
+    await db.execute(
+      'INSERT INTO forum_blocks (user_id, blocked_user_id) VALUES (?, ?)',
+      [userId, targetId]
+    );
+  } catch (err: any) {
+    if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+      return res.json({ success: true, already: true });
+    }
+    throw err;
+  }
   res.json({ success: true });
 });
 
@@ -291,11 +298,18 @@ router.post('/forum/users/:userId/follow', requireAuth, async (req: AuthRequest,
     return res.status(409).json({ error: '已经关注过了' });
   }
 
-  // 创建关注关系
-  await forumDb.execute(
-    'INSERT INTO forum_follows (follower_id, following_id) VALUES (?, ?)',
-    [followerId, followingId]
-  );
+  // 创建关注关系（并发下若 UNIQUE 拦截则与 existing 分支保持一致语义）
+  try {
+    await forumDb.execute(
+      'INSERT INTO forum_follows (follower_id, following_id) VALUES (?, ?)',
+      [followerId, followingId]
+    );
+  } catch (err: any) {
+    if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+      return res.status(409).json({ error: '已经关注过了' });
+    }
+    throw err;
+  }
 
   // 更新关注数和粉丝数（INSERT OR UPDATE 确保 profile 存在）
   await forumDb.execute(
