@@ -87,6 +87,7 @@ export async function initDatabase(
       id_card_no_enc TEXT NOT NULL,
       portfolio_url VARCHAR(500) NULL,
       sample_work_url VARCHAR(500) NULL,
+      sample_audio_url VARCHAR(500) NULL,
       bio TEXT NULL,
       status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
       reject_reason VARCHAR(500) NULL,
@@ -129,6 +130,20 @@ export async function initDatabase(
       'ALTER TABLE beatmaker_applications ' +
       'ADD UNIQUE KEY uk_beatmaker_applications_pending_user (pending_user_unique)'
     );
+  }
+
+  // Beatmaker application: add sample_audio_url column (migrate existing tables)
+  const bmAppAudioColExists = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'beatmaker_applications'
+        AND COLUMN_NAME = 'sample_audio_url'`
+  );
+  if (!bmAppAudioColExists || bmAppAudioColExists.c === 0) {
+    try {
+      await db.execute(
+        'ALTER TABLE beatmaker_applications ADD COLUMN sample_audio_url VARCHAR(500) NULL AFTER sample_work_url'
+      );
+    } catch (_) { /* ignore if already exists */ }
   }
 
   // Beatmaker 认证通过后的资料表（1:1 with users）

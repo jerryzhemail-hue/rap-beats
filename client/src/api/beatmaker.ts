@@ -1,4 +1,5 @@
 import { request } from './request';
+import { useAuthStore } from '@/stores/auth';
 
 // ─── 类型 ──────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export interface BeatmakerApplication {
   reject_reason: string | null;
   portfolio_url: string | null;
   sample_work_url: string | null;
+  sample_audio_url: string | null;
   bio: string | null;
   created_at: string;
   reviewed_at: string | null;
@@ -52,11 +54,60 @@ export async function submitBeatmakerApplication(data: {
   portfolio_url: string;
   sample_work_url: string;
   bio: string;
+  sample_audio_url?: string;
 }) {
   return request<{ message: string; application_id: number }>('/api/beatmaker/apply', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
+  });
+}
+
+export async function uploadBeatmakerAudio(
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<{
+  message: string;
+  audio_url: string;
+  stored_value: string;
+  original_name: string;
+  size: number;
+}> {
+  const formData = new FormData();
+  formData.append('audio', file);
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/beatmaker/upload-audio');
+
+    const authStore = useAuthStore();
+    if (authStore.token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${authStore.token}`);
+    }
+
+    xhr.upload.onprogress = (e: ProgressEvent) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(data);
+        } else if (xhr.status === 401) {
+          reject(new Error('未授权，请重新登录'));
+        } else {
+          reject(new Error(data.error || data.message || `请求失败: ${xhr.status}`));
+        }
+      } catch {
+        reject(new Error('音频上传失败，请重试'));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('网络错误，音频上传失败'));
+    xhr.send(formData);
   });
 }
 

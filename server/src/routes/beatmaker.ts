@@ -1,8 +1,10 @@
 import { Router, Request, Response } from 'express';
+import multer from 'multer';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
 import { requireBeatmaker } from '../middleware/beatmaker.js';
 import { getDatabaseClient } from '../database/client.js';
 import { encryptIdCard, decryptIdCard, maskIdCard } from '../utils/idcard-cipher.js';
+import { saveBuffer } from '../services/storage.js';
 
 const router = Router();
 
@@ -14,7 +16,7 @@ const REJECT_REAPPLY_DAYS = 3;
 router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
   const database = getDatabaseClient();
   const userId = req.user!.id;
-  const { real_name, id_card_no, portfolio_url, sample_work_url, bio } = req.body ?? {};
+  const { real_name, id_card_no, portfolio_url, sample_work_url, bio, sample_audio_url } = req.body ?? {};
 
   if (!real_name || typeof real_name !== 'string' || real_name.trim().length < 2) {
     return res.status(400).json({ error: '请填写真实姓名（至少 2 个字符）' });
@@ -72,9 +74,9 @@ router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
   try {
     const result = await database.execute(
       `INSERT INTO beatmaker_applications
-         (user_id, real_name, id_card_no_enc, portfolio_url, sample_work_url, bio, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
-      [userId, real_name.trim(), encrypted, portfolio_url.trim(), sample_work_url.trim(), bio.trim()]
+         (user_id, real_name, id_card_no_enc, portfolio_url, sample_work_url, sample_audio_url, bio, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [userId, real_name.trim(), encrypted, portfolio_url.trim(), sample_work_url.trim(), sample_audio_url?.trim() || null, bio.trim()]
     );
     return res.json({ message: '申请已提交，请等待审核', application_id: result.insertId });
   } catch (error: any) {
@@ -94,6 +96,59 @@ router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
+// ─── POST /api/beatmaker/upload-audio ────────────────────────
+// 申请上传音频样本文件
+const beatmakerAudioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['.mp3', '.wav', '.aac', '.m4a', '.flac', '.ogg'];
+    const ext = file.originalname.includes('.')
+      ? file.originalname.slice(file.originalname.lastIndexOf('.')).toLowerCase()
+      : '';
+    if (!allowed.includes(ext)) {
+      cb(new Error('音频仅支持 MP3、WAV、AAC、M4A、FLAC、OGG 格式'));
+    } else {
+      cb(null, true);
+    }
+  }
+});
+
+router.post('/upload-audio', requireAuth, (req: Request, res: Response, next) => {
+  beatmakerAudioUpload.single('audio')(req, res, (err: any) => {
+    if (err) {
+      if (err.message?.includes('仅支持') || err.message?.includes('format')) {
+        return res.status(400).json({ error: err.message });
+      }
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: '文件大小不能超过 20MB' });
+      }
+      return res.status(500).json({ error: '文件上传失败' });
+    }
+    next();
+  });
+}, async (req: AuthRequest, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: '请选择音频文件' });
+  }
+  try {
+    const asset = await saveBuffer('audio', {
+      buffer: req.file.buffer,
+      originalName: req.file.originalname,
+    });
+    res.json({
+      message: '音频上传成功',
+      audio_url: asset.publicUrl,
+      stored_value: asset.storedValue,
+      original_name: req.file.originalname,
+      size: req.file.size,
+    });
+  } catch (err: any) {
+    console.error('[beatmaker-upload-audio] failed:', err);
+    res.status(500).json({ error: '音频上传失败，请重试' });
+  }
+});
+
 // ─── GET /api/beatmaker/application/me ────────────────────────
 // 当前用户的最新申请状态
 router.get('/application/me', requireAuth, async (req: AuthRequest, res) => {
@@ -106,12 +161,13 @@ router.get('/application/me', requireAuth, async (req: AuthRequest, res) => {
     reject_reason: string | null;
     portfolio_url: string | null;
     sample_work_url: string | null;
+    sample_audio_url: string | null;
     bio: string | null;
     created_at: string;
     reviewed_at: string | null;
     last_rejected_at: string | null;
   }>(
-    `SELECT id, real_name, id_card_no_enc, status, reject_reason, portfolio_url, sample_work_url, bio,
+    `SELECT id, real_name, id_card_no_enc, status, reject_reason, portfolio_url, sample_work_url, sample_audio_url, bio,
             created_at, reviewed_at, last_rejected_at
        FROM beatmaker_applications
       WHERE user_id = ?
@@ -139,6 +195,7 @@ router.get('/application/me', requireAuth, async (req: AuthRequest, res) => {
       reject_reason: row.reject_reason,
       portfolio_url: row.portfolio_url,
       sample_work_url: row.sample_work_url,
+      sample_audio_url: row.sample_audio_url,
       bio: row.bio,
       created_at: row.created_at,
       reviewed_at: row.reviewed_at,

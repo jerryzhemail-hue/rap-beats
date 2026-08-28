@@ -29,6 +29,7 @@ export const useBeatmakerStore = defineStore('beatmaker', () => {
     portfolio_url: string;
     sample_work_url: string;
     bio: string;
+    sample_audio_url?: string;
   }) {
     const data = await submitBeatmakerApplication(payload);
     await loadMyApplication(true);

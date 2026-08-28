@@ -161,8 +161,9 @@ router.get('/me', requireAuth, async (req: AuthRequest, res) => {
     vip_expire_at: string | null;
     avatar_url: string | null;
     created_at: string;
+    is_beatmaker: number;
   }>(
-    'SELECT id, username, email, role, vip_level, vip_expire_at, avatar_url, created_at FROM users WHERE id = ?',
+    'SELECT id, username, email, role, vip_level, vip_expire_at, avatar_url, created_at, is_beatmaker FROM users WHERE id = ?',
     [req.user!.id]
   );
 
