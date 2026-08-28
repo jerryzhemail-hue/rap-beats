@@ -277,6 +277,15 @@ router.post('/:id/approve', requireAdmin, async (req: AuthRequest, res: Response
     id
   ).catch(() => {});
 
+  // 5. 记录管理员通知
+  const { createAdminNotification } = await import('./admin-notifications-helper.js');
+  createAdminNotification({
+    type: 'beatmaker_approved',
+    title: 'Beatmaker 认证通过',
+    content: `申请 ID ${id} 已通过审核`,
+    data: { applicationId: id, userId: app.user_id, reviewerId }
+  }).catch(() => {});
+
   return res.json({ message: '已通过认证' });
 });
 
@@ -321,6 +330,15 @@ router.post('/:id/reject', requireAdmin, async (req: AuthRequest, res: Response)
     'beatmaker_application',
     id
   ).catch(() => {});
+
+  // 记录管理员通知
+  const { createAdminNotification } = await import('./admin-notifications-helper.js');
+  createAdminNotification({
+    type: 'beatmaker_rejected',
+    title: 'Beatmaker 认证驳回',
+    content: `申请 ID ${id} 已被驳回`,
+    data: { applicationId: id, userId: app.user_id, reviewerId, rejectReason: reject_reason.trim() }
+  }).catch(() => {});
 
   return res.json({ message: '已拒绝' });
 });

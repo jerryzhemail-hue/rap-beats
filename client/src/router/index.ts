@@ -61,7 +61,8 @@ const router = createRouter({
         { path: 'license', name: 'AdminLicense', component: () => import('../views/admin/LicenseView.vue') },
         { path: 'home-footer', name: 'AdminHomeFooter', component: () => import('../views/admin/HomeFooterManageView.vue') },
         { path: 'homepage-config', name: 'AdminHomepageConfig', component: () => import('../views/admin/HomepageConfigView.vue') },
-        { path: 'beatmaker-approvals', name: 'AdminBeatmakerApprovals', component: () => import('../views/admin/BeatmakerManageView.vue') }
+        { path: 'beatmaker-approvals', name: 'AdminBeatmakerApprovals', component: () => import('../views/admin/BeatmakerManageView.vue') },
+        { path: 'notifications', name: 'AdminNotifications', component: () => import('../views/admin/AdminNotificationsView.vue') }
       ]
     },
     {

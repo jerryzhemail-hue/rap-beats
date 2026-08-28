@@ -774,6 +774,50 @@ export async function initDatabase(
 
   // ─── 会员数据库初始化(积分 + VIP) ────────────────────────────────────────
   await initMembershipDatabase(membershipDb);
+
+  // ─── 管理员通知表 ────────────────────────────────────────────────────────
+  try {
+    // 检查表是否存在，以及是否需要从 data 列迁移到 extra_data
+    const tableCheck = await db.queryOne<{ cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM information_schema.TABLES
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_notifications'`
+    );
+    const tableExists = (tableCheck?.cnt ?? 0) > 0;
+    let shouldCreate = !tableExists;
+
+    if (tableExists) {
+      // 检查是否有旧的 data 列（MySQL 保留字）
+      const colCheck = await db.queryOne<{ cnt: number }>(
+        `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_notifications' AND COLUMN_NAME = 'data'`
+      );
+      if ((colCheck?.cnt ?? 0) > 0) {
+        // 旧表有 data 列，需要迁移
+        await db.execute('DROP TABLE admin_notifications');
+        shouldCreate = true;
+      }
+    }
+
+    if (shouldCreate) {
+      await db.execute(`
+        CREATE TABLE admin_notifications (
+          id INT PRIMARY KEY AUTO_INCREMENT,
+          type VARCHAR(50) NOT NULL,
+          title VARCHAR(200) NOT NULL,
+          content TEXT NULL,
+          extra_data JSON NULL,
+          is_read TINYINT DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_an_is_read (is_read),
+          INDEX idx_an_type (type),
+          INDEX idx_an_created_at (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+      `);
+    }
+    console.log('[init] admin_notifications table ensured');
+  } catch (err) {
+    console.warn('[init] admin_notifications table creation failed:', err);
+  }
 }
 
 async function initMembershipDatabase(membershipDb: import('./client.js').DatabaseClient) {

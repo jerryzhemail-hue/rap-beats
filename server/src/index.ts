@@ -72,6 +72,7 @@ async function startServer() {
     { default: beatmakerRouter },
     { default: adminBeatmakerRouter },
     { default: homeFooterRouter },
+    { default: adminNotificationsRouter },
   ] = await Promise.all([
     import('./routes/beats.js'),
     import('./routes/rappers.js'),
@@ -89,6 +90,7 @@ async function startServer() {
     import('./routes/beatmaker.js'),
     import('./routes/admin-beatmaker.js'),
     import('./routes/home-footer.js'),
+    import('./routes/admin-notifications.js'),
   ]);
 
   app.use('/api', beatsRouter);
@@ -101,6 +103,7 @@ async function startServer() {
   app.use('/api', userRouter);
   app.use('/api', adminRouter);
   app.use('/api/admin/beatmaker-applications', adminBeatmakerRouter);
+  app.use('/api/admin/notifications', adminNotificationsRouter);
   app.use('/api', paymentRouter);
   app.use('/api', bannersRouter);
   app.use('/api', previewRouter);

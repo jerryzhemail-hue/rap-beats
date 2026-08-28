@@ -1,10 +1,26 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { fetchAdminUnreadCount } from '@/api/admin-notifications'
 
 const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
+
+const unreadCount = ref(0)
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+async function loadUnreadCount() {
+  try {
+    const res = await fetchAdminUnreadCount()
+    unreadCount.value = res.unreadCount
+  } catch {}
+}
+
+function goToNotifications() {
+  router.push('/admin/notifications')
+}
 
 const pageTitle = computed(() => {
   if (route.path === '/admin') return '数据看板'
@@ -19,7 +35,17 @@ const pageTitle = computed(() => {
   if (route.path === '/admin/license') return '使用协议'
   if (route.path === '/admin/home-footer') return '首页尾部'
   if (route.path === '/admin/homepage-config') return '首页头部配置'
+  if (route.path === '/admin/notifications') return '消息通知'
   return '管理后台'
+})
+
+onMounted(() => {
+  loadUnreadCount()
+  pollTimer = setInterval(loadUnreadCount, 30000) // 每 30 秒轮询
+})
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
 })
 </script>
 
@@ -79,6 +105,11 @@ const pageTitle = computed(() => {
           <span class="nav-icon">🧭</span>
           首页头部配置
         </router-link>
+        <router-link to="/admin/notifications" class="nav-item" :class="{ active: route.path === '/admin/notifications' }">
+          <span class="nav-icon">🔔</span>
+          <span class="nav-label">消息通知</span>
+          <span class="nav-badge" v-if="unreadCount > 0">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
+        </router-link>
       </nav>
       <div class="admin-footer">
         <router-link to="/" class="back-link">← 返回前台</router-link>
@@ -87,7 +118,17 @@ const pageTitle = computed(() => {
     <main class="admin-main">
       <header class="admin-header">
         <h1>{{ pageTitle }}</h1>
-        <span class="admin-user">{{ authStore.user?.username }}</span>
+        <div class="header-right">
+          <button
+            class="header-notif-btn"
+            :class="{ has-unread: unreadCount > 0 }"
+            @click="goToNotifications"
+          >
+            🔔
+            <span class="header-badge" v-if="unreadCount > 0">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
+          </button>
+          <span class="admin-user">{{ authStore.user?.username }}</span>
+        </div>
       </header>
       <div class="admin-content">
         <router-view />
@@ -176,6 +217,25 @@ const pageTitle = computed(() => {
   text-align: center;
 }
 
+.nav-label {
+  flex: 1;
+}
+
+.nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: #fff;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .admin-footer {
   padding: 16px 20px;
   border-top: 1px solid #1e1e3a;
@@ -217,6 +277,54 @@ const pageTitle = computed(() => {
   font-weight: 700;
   margin: 0;
   color: #fff;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-notif-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid #2a2a4a;
+  border-radius: 10px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.header-notif-btn:hover {
+  background: rgba(124, 58, 237, 0.15);
+  border-color: #7c3aed;
+}
+
+.header-notif-btn.has-unread {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.header-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  color: #fff;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .admin-user {

@@ -316,6 +316,17 @@ router.post('/payment/notify', async (req: Request, res: Response) => {
 
     orderUserId = orderInfo?.user_id ?? null;
     console.log(`VIP activated via payment: user ${orderInfo?.user_id} -> ${orderInfo?.vip_level}`);
+
+    // 通知管理员：会员购买成功
+    if (orderInfo) {
+      const { createAdminNotification } = await import('./admin-notifications-helper.js');
+      createAdminNotification({
+        type: 'vip_purchased',
+        title: '会员购买',
+        content: `用户 ${orderInfo.user_id} 购买了 ${PRICE_CONFIG[orderInfo.vip_level]?.name || orderInfo.vip_level}`,
+        data: { userId: orderInfo.user_id, vipLevel: orderInfo.vip_level }
+      }).catch(() => {});
+    }
   } catch (err: any) {
     // ORDER_NOT_FOUND 和 ORDER_ALREADY_COMPLETED 是预期情况，返回 success 避免重复通知
     if (!['ORDER_NOT_FOUND', 'ORDER_ALREADY_COMPLETED'].includes(err.message)) {

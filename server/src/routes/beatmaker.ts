@@ -78,6 +78,20 @@ router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
       [userId, real_name.trim(), encrypted, portfolio_url.trim(), sample_work_url.trim(), sample_audio_url?.trim() || null, bio.trim()]
     );
+
+    // 通知管理员：有新的 Beatmaker 申请
+    const { createAdminNotification } = await import('./admin-notifications-helper.js');
+    const userInfo = await database.queryOne<{ username: string }>(
+      'SELECT username FROM users WHERE id = ?',
+      [userId]
+    );
+    createAdminNotification({
+      type: 'beatmaker_application',
+      title: 'Beatmaker 新认证申请',
+      content: `用户 ${userInfo?.username || userId} 提交了 Beatmaker 认证申请`,
+      data: { applicationId: result.insertId, userId, realName: real_name.trim() }
+    }).catch(() => {});
+
     return res.json({ message: '申请已提交，请等待审核', application_id: result.insertId });
   } catch (error: any) {
     // pending_user_unique 生成列 + UNIQUE 会拦截同一用户第 2 条 pending 申请，

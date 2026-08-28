@@ -73,6 +73,15 @@ router.post('/register', registerLimiter, async (req, res) => {
     return res.status(500).json({ error: '注册失败，请稍后重试' });
   }
 
+  // 通知管理员：新用户注册
+  const { createAdminNotification } = await import('./admin-notifications-helper.js');
+  createAdminNotification({
+    type: 'new_user_registered',
+    title: '新用户注册',
+    content: `用户 ${username} (${email}) 完成了注册`,
+    data: { userId: result.insertId, username, email }
+  }).catch(() => {});
+
   // 查询用户角色（第一个注册的用户可能被迁移脚本设为 admin）
   const userRow = await database.queryOne<{ role: string; vip_level: string; avatar_url: string | null; is_beatmaker: number }>(
     'SELECT role, vip_level, avatar_url, is_beatmaker FROM users WHERE id = ?',
