@@ -121,7 +121,7 @@ onUnmounted(() => {
         <div class="header-right">
           <button
             class="header-notif-btn"
-            :class="{ has-unread: unreadCount > 0 }"
+            :class="{ 'has-unread': unreadCount > 0 }"
             @click="goToNotifications"
           >
             🔔
