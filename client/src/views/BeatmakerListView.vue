@@ -88,11 +88,114 @@ function handleAuthClose() {
     </header>
 
     <div v-if="loading" class="state">加载中…</div>
-    <div v-else-if="beatmakers.length === 0" class="state empty">
+    <div v-else-if="beatmakers.length === 0 && !isAuthenticated" class="state empty">
       <p>暂无认证 Beatmaker</p>
       <button class="btn primary" @click="handleApply">成为第一个</button>
     </div>
-    <div v-else class="page-body">
+    <template v-else>
+      <div class="page-body">
+        <!-- 已登录但未认证：引导卡片 -->
+        <div v-if="isAuthenticated && !isBeatmaker" class="cert-guide">
+        <div class="cg-hero">
+          <div class="cg-illustration">
+            <div class="cg-note">
+              <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 18V5l12-2v13"/>
+                <circle cx="6" cy="18" r="3"/>
+                <circle cx="18" cy="16" r="3"/>
+              </svg>
+            </div>
+          </div>
+          <div class="cg-content">
+            <div class="cg-badge">
+              <span class="cg-badge-dot"></span>
+              原创制作人认证
+            </div>
+            <h2 class="cg-title">成为认证 Beatmaker，<br>让你的音乐触达更多人</h2>
+            <p class="cg-desc">
+              通过平台认证后，你可以上传原创伴奏、建立制作人主页、展示作品集，
+              与平台内超过 10 万音乐爱好者建立连接。
+            </p>
+
+            <div class="cg-benefits">
+              <div class="cg-benefit">
+                <div class="cg-benefit-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15V6"/>
+                    <path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/>
+                    <path d="M12 12H3"/>
+                    <path d="M16 6H3"/>
+                    <path d="M12 18H3"/>
+                  </svg>
+                </div>
+                <div>
+                  <div class="cg-benefit-title">上传原创伴奏</div>
+                  <div class="cg-benefit-desc">专属上传入口，作品上架即获得首页推荐</div>
+                </div>
+              </div>
+              <div class="cg-benefit">
+                <div class="cg-benefit-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                    <circle cx="12" cy="7" r="4"/>
+                  </svg>
+                </div>
+                <div>
+                  <div class="cg-benefit-title">专属制作人主页</div>
+                  <div class="cg-benefit-desc">展示简介、作品集、社交链接，建立个人品牌</div>
+                </div>
+              </div>
+              <div class="cg-benefit">
+                <div class="cg-benefit-icon">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
+                    <polyline points="17 6 23 6 23 12"/>
+                  </svg>
+                </div>
+                <div>
+                  <div class="cg-benefit-title">数据洞察</div>
+                  <div class="cg-benefit-desc">实时查看作品下载、点赞数据，了解听众喜好</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="cg-steps">
+              <div class="cg-step">
+                <div class="cg-step-num">1</div>
+                <div class="cg-step-label">填写资料</div>
+              </div>
+              <div class="cg-step-line"></div>
+              <div class="cg-step">
+                <div class="cg-step-num">2</div>
+                <div class="cg-step-label">管理员审核</div>
+              </div>
+              <div class="cg-step-line"></div>
+              <div class="cg-step">
+                <div class="cg-step-num">3</div>
+                <div class="cg-step-label">获得认证</div>
+              </div>
+            </div>
+
+            <div class="cg-actions">
+              <button class="cg-btn-primary" @click="handleApply">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 20h9"/>
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                </svg>
+                立即申请认证
+              </button>
+              <button class="cg-btn-secondary" @click="router.push('/beatmaker/apply?guide=1')">
+                查看认证流程
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="9 18 15 12 9 6"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="cg-decoration"></div>
+        </div>
+      </div>
+
       <!-- 未登录引导横幅 -->
       <div v-if="!isAuthenticated" class="auth-banner">
         <div class="banner-glow"></div>
@@ -182,7 +285,8 @@ function handleAuthClose() {
           </div>
         </article>
       </div>
-    </div>
+      </div>
+    </template>
 
     <!-- 登录引导弹窗 -->
     <Teleport to="body">
@@ -753,5 +857,274 @@ function handleAuthClose() {
 .btn.primary {
   background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: #fff;
+}
+
+/* ─── 认证引导卡片 ─────────────────────────────────────────── */
+.cert-guide {
+  margin-bottom: 24px;
+}
+
+.cg-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 0;
+  background: linear-gradient(135deg, rgba(75, 63, 227, 0.15) 0%, rgba(39, 210, 191, 0.08) 100%);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.cg-illustration {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+  color: #fff;
+  min-height: 320px;
+  overflow: hidden;
+}
+
+.cg-note {
+  position: relative;
+  z-index: 2;
+  width: 140px;
+  height: 140px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cg-illustration::before {
+  content: '';
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.2) 0%, transparent 70%);
+  top: -60px;
+  right: -60px;
+}
+
+.cg-content {
+  position: relative;
+  padding: 32px 36px;
+  z-index: 1;
+}
+
+.cg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: rgba(75, 63, 227, 0.15);
+  color: var(--accent);
+  border-radius: 100px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.cg-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.2); }
+}
+
+.cg-title {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.cg-desc {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.cg-benefits {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.cg-benefit {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: all 0.2s;
+}
+
+.cg-benefit:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px var(--shadow);
+}
+
+.cg-benefit-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cg-benefit-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.cg-benefit-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.cg-steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.cg-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.cg-step-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cg-step-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.cg-step-line {
+  flex: 1;
+  height: 2px;
+  max-width: 60px;
+  background: var(--border);
+  border-radius: 1px;
+}
+
+.cg-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.cg-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 24px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 14px var(--shadow);
+}
+
+.cg-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px var(--shadow);
+}
+
+.cg-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cg-btn-secondary:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-light);
+}
+
+.cg-decoration {
+  position: absolute;
+  top: -40px;
+  right: -40px;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(75, 63, 227, 0.15) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .cg-hero {
+    grid-template-columns: 1fr;
+  }
+  .cg-illustration {
+    min-height: 180px;
+    padding: 20px;
+  }
+  .cg-benefits {
+    grid-template-columns: 1fr;
+  }
+  .cg-title {
+    font-size: 20px;
+  }
+  .cg-steps {
+    gap: 4px;
+  }
+  .cg-step-line {
+    max-width: 30px;
+  }
 }
 </style>
