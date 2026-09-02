@@ -9,33 +9,11 @@ export interface FooterLink {
   group: FooterLinkGroup
 }
 
-export interface LicenseCard {
-  id: string
-  icon: string
-  title: string
-  description: string
-  ctaText: string
-  ctaUrl: string
-  sortOrder: number
-  isActive: boolean
-}
-
 export interface CreatorCta {
   title: string
   subtitle: string
   buttonText: string
   buttonUrl: string
-  isActive: boolean
-}
-
-export type FooterStatAuto = 'none' | 'totalBeats' | 'totalRappers' | 'totalDownloads' | 'totalUsers'
-
-export interface FooterStat {
-  id: string
-  label: string
-  value: string
-  auto: FooterStatAuto
-  sortOrder: number
   isActive: boolean
 }
 
@@ -68,9 +46,7 @@ export interface SubscribeSection extends SectionSettings {
 }
 
 export interface HomeFooterConfig {
-  licenseCards: LicenseCard[]
   creatorCta: CreatorCta
-  stats: FooterStat[]
   links: FooterLink[]
   compliance: FooterCompliance
   membershipSection: SectionSettings
@@ -96,6 +72,9 @@ export interface HomeRapper {
   avatar_url: string | null
   bio: string | null
   beat_count: number
+  total_plays?: number
+  total_downloads?: number
+  popularity?: number
 }
 
 export interface ChartBeat {

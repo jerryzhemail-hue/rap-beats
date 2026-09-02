@@ -7,31 +7,11 @@ const router = Router();
 
 const CONFIG_KEY = 'home_footer';
 
-type LicenseCard = {
-  id: string;
-  icon: string;
-  title: string;
-  description: string;
-  ctaText: string;
-  ctaUrl: string;
-  sortOrder: number;
-  isActive: boolean;
-};
-
 type CreatorCta = {
   title: string;
   subtitle: string;
   buttonText: string;
   buttonUrl: string;
-  isActive: boolean;
-};
-
-type FooterStat = {
-  id: string;
-  label: string;
-  value: string;
-  auto: 'none' | 'totalBeats' | 'totalRappers' | 'totalDownloads' | 'totalUsers';
-  sortOrder: number;
   isActive: boolean;
 };
 
@@ -71,9 +51,7 @@ type SubscribeSection = SectionSettings & {
 };
 
 type HomeFooterConfig = {
-  licenseCards: LicenseCard[];
   creatorCta: CreatorCta;
-  stats: FooterStat[];
   links: FooterLink[];
   compliance: FooterCompliance;
   membershipSection: SectionSettings;
@@ -113,19 +91,6 @@ function toInt(value: unknown, fallback: number, min = 1, max = 12): number {
 function normalizeConfig(input: unknown): HomeFooterConfig {
   const raw = (input && typeof input === 'object' ? input : {}) as Partial<HomeFooterConfig>;
 
-  const licenseCards = Array.isArray(raw.licenseCards)
-    ? raw.licenseCards.map((card, index): LicenseCard => ({
-        id: asString((card as LicenseCard).id, `card-${index}`),
-        icon: asString((card as LicenseCard).icon, '🎵'),
-        title: asString((card as LicenseCard).title),
-        description: asString((card as LicenseCard).description),
-        ctaText: asString((card as LicenseCard).ctaText),
-        ctaUrl: asString((card as LicenseCard).ctaUrl),
-        sortOrder: Number((card as LicenseCard).sortOrder ?? index),
-        isActive: Boolean((card as LicenseCard).isActive)
-      }))
-    : [];
-
   const creatorCtaRaw = (raw.creatorCta ?? {}) as Partial<CreatorCta>;
   const creatorCta: CreatorCta = {
     title: asString(creatorCtaRaw.title),
@@ -134,23 +99,6 @@ function normalizeConfig(input: unknown): HomeFooterConfig {
     buttonUrl: asString(creatorCtaRaw.buttonUrl),
     isActive: Boolean(creatorCtaRaw.isActive)
   };
-
-  const stats = Array.isArray(raw.stats)
-    ? raw.stats.map((stat, index): FooterStat => {
-        const auto = (stat as FooterStat).auto;
-        const validAuto = ['none', 'totalBeats', 'totalRappers', 'totalDownloads', 'totalUsers'].includes(auto)
-          ? auto
-          : 'none';
-        return {
-          id: asString((stat as FooterStat).id, `stat-${index}`),
-          label: asString((stat as FooterStat).label),
-          value: asString((stat as FooterStat).value),
-          auto: validAuto as FooterStat['auto'],
-          sortOrder: Number((stat as FooterStat).sortOrder ?? index),
-          isActive: Boolean((stat as FooterStat).isActive)
-        };
-      })
-    : [];
 
   const links = Array.isArray(raw.links)
     ? raw.links.map((link, index): FooterLink => {
@@ -207,36 +155,7 @@ function normalizeConfig(input: unknown): HomeFooterConfig {
     buttonText: asString(subscribeRaw.buttonText, '订阅')
   };
 
-  return { licenseCards, creatorCta, stats, links, compliance, membershipSection, rappersSection, chartsSection, subscribeSection };
-}
-
-async function resolveStatsForPublic(config: HomeFooterConfig, db: DatabaseClient): Promise<FooterStat[]> {
-  const cache: Record<string, string> = {};
-
-  async function count(sql: string): Promise<string> {
-    if (cache[sql] !== undefined) return cache[sql];
-    const value = (await db.queryOne<{ count: number | null; total?: number | null }>(sql));
-    const result = String(value?.total ?? value?.count ?? 0);
-    cache[sql] = result;
-    return result;
-  }
-
-  const resolvers: Record<Exclude<FooterStat['auto'], 'none'>, () => Promise<string>> = {
-    totalBeats: () => count('SELECT COUNT(*) as count FROM beats'),
-    totalRappers: () => count('SELECT COUNT(*) as count FROM rappers'),
-    totalDownloads: () => count('SELECT SUM(download_count) as total FROM beats'),
-    totalUsers: () => count('SELECT COUNT(*) as count FROM users')
-  };
-
-  const resolved: FooterStat[] = [];
-  for (const stat of config.stats) {
-    const resolver = stat.auto !== 'none' ? resolvers[stat.auto] : null;
-    resolved.push({
-      ...stat,
-      value: resolver ? await resolver() : stat.value
-    });
-  }
-  return resolved;
+  return { creatorCta, links, compliance, membershipSection, rappersSection, chartsSection, subscribeSection };
 }
 
 async function loadTopRappers(db: DatabaseClient, limit: number) {
@@ -322,10 +241,9 @@ router.get('/home/footer', async (_req, res) => {
   const faqs = await db.queryMany(
     'SELECT id, category, question, answer, sort_order, is_active, updated_at FROM home_footer_faqs WHERE is_active = 1 ORDER BY sort_order ASC, id ASC'
   );
-  const resolvedStats = await resolveStatsForPublic(config, db);
   const rappers = await loadTopRappers(db, config.rappersSection.count);
   const charts = await loadCharts(db, config.chartsSection.count);
-  res.json({ config: { ...config, stats: resolvedStats }, faqs, rappers, charts });
+  res.json({ config, faqs, rappers, charts });
 });
 
 // 后台读取：返回补齐默认字段的配置（不填充自动统计值）

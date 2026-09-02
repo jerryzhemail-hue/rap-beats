@@ -29,8 +29,6 @@ const groupLabels: Record<FooterLinkGroup, string> = {
   support: '支持'
 }
 
-const activeCards = computed(() => (config.value?.licenseCards ?? []).filter((item) => item.isActive).sort((a, b) => a.sortOrder - b.sortOrder))
-const activeStats = computed(() => (config.value?.stats ?? []).filter((item) => item.isActive).sort((a, b) => a.sortOrder - b.sortOrder))
 const activeChartBeats = computed<ChartBeat[]>(() => charts.value[chartTab.value] ?? [])
 const groupedLinks = computed(() => {
   const groups = new Map<FooterLinkGroup, { label: string; links: typeof config.value.links }>()
@@ -53,6 +51,13 @@ function chartMetric(beat: ChartBeat): string {
   if (chartTab.value === 'favorites') return `${beat.favorite_count ?? 0} 收藏`
   if (chartTab.value === 'plays') return `${beat.play_count ?? 0} 播放`
   return `${beat.download_count ?? 0} 下载`
+}
+
+// 人气播放量格式化（>10000 显示 X.X 万）
+function formatRapperPlays(n: number): string {
+  if (!n) return '0'
+  if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万'
+  return String(n)
 }
 
 async function handleSubscribe() {
@@ -91,28 +96,6 @@ onMounted(async () => {
 
 <template>
   <footer v-if="config" class="home-footer">
-    <section v-if="activeStats.length" class="footer-stats">
-      <div v-for="stat in activeStats" :key="stat.id" class="footer-stat">
-        <strong>{{ stat.value }}</strong>
-        <span>{{ stat.label }}</span>
-      </div>
-    </section>
-
-    <section v-if="activeCards.length" class="footer-license">
-      <div class="footer-section-title">
-        <h2>授权方式</h2>
-        <p>普通下载仅限个人非商业使用，商用前请先确认授权范围</p>
-      </div>
-      <div class="license-grid">
-        <div v-for="card in activeCards" :key="card.id" class="license-card">
-          <span class="license-icon">{{ card.icon }}</span>
-          <h3>{{ card.title }}</h3>
-          <p>{{ card.description }}</p>
-          <router-link v-if="card.ctaText" :to="card.ctaUrl || '#'" class="license-cta">{{ card.ctaText }}</router-link>
-        </div>
-      </div>
-    </section>
-
     <section v-if="config.creatorCta.isActive" class="creator-cta">
       <div class="creator-cta-copy">
         <h2>{{ config.creatorCta.title }}</h2>
@@ -153,7 +136,8 @@ onMounted(async () => {
           </span>
           <span class="rapper-meta">
             <strong>{{ rapper.name }}</strong>
-            <small>{{ rapper.beat_count }} 首作品</small>
+            <small v-if="rapper.total_plays > 0">🔥 {{ formatRapperPlays(rapper.total_plays) }} 播放 · {{ rapper.beat_count }} 首作品</small>
+            <small v-else>{{ rapper.beat_count }} 首作品</small>
           </span>
         </router-link>
       </div>
@@ -252,33 +236,6 @@ onMounted(async () => {
   margin-top: 64px;
 }
 
-.footer-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  max-width: 1120px;
-  margin: 0 auto 48px;
-  text-align: center;
-}
-
-.footer-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.footer-stat strong {
-  font-size: 32px;
-  font-weight: 800;
-  color: var(--text-primary);
-}
-
-.footer-stat span {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.footer-license,
 .footer-faq,
 .creator-cta,
 .membership-section,
@@ -307,53 +264,6 @@ onMounted(async () => {
   margin: 6px 0 0;
   font-size: 13px;
   color: var(--text-secondary);
-}
-
-.license-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.license-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
-  padding: 22px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-}
-
-.license-icon {
-  font-size: 26px;
-  margin-bottom: 14px;
-}
-
-.license-card h3 {
-  margin: 0 0 8px;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.license-card p {
-  margin: 0 0 18px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  flex: 1;
-}
-
-.license-cta {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--accent);
-  text-decoration: none;
-}
-
-.license-cta:hover {
-  color: var(--accent-hover);
 }
 
 .creator-cta {
@@ -823,14 +733,6 @@ onMounted(async () => {
 @media (max-width: 860px) {
   .home-footer {
     padding: 32px 20px 24px;
-  }
-
-  .footer-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .license-grid {
-    grid-template-columns: 1fr;
   }
 
   .membership-grid,

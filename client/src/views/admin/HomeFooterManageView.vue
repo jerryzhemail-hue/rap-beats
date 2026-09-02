@@ -10,29 +10,19 @@ import {
   updateFaq,
   updateHomeFooterConfig
 } from '@/api/homeFooter'
-import type { FooterFaq, FooterLinkGroup, FooterStatAuto, HomeFooterConfig, Subscription } from '@/api/homeFooter'
+import type { FooterFaq, FooterLinkGroup, HomeFooterConfig, Subscription } from '@/api/homeFooter'
 
-type TabKey = 'license' | 'cta' | 'membership' | 'rappers' | 'charts' | 'stats' | 'links' | 'compliance' | 'faqs' | 'subscriptions'
+type TabKey = 'cta' | 'membership' | 'rappers' | 'charts' | 'links' | 'compliance' | 'faqs' | 'subscriptions'
 
 const tabs: { key: TabKey; label: string }[] = [
-  { key: 'license', label: '授权卡片' },
   { key: 'cta', label: '入驻 CTA' },
   { key: 'membership', label: '会员权益' },
   { key: 'rappers', label: '热门制作人' },
   { key: 'charts', label: '热门榜单' },
-  { key: 'stats', label: '数据背书' },
   { key: 'links', label: '底部链接' },
   { key: 'compliance', label: '合规信息' },
   { key: 'faqs', label: '常见问题' },
   { key: 'subscriptions', label: '订阅列表' }
-]
-
-const statAutoOptions: { value: FooterStatAuto; label: string }[] = [
-  { value: 'none', label: '手动填写' },
-  { value: 'totalBeats', label: '自动：Beat 数量' },
-  { value: 'totalRappers', label: '自动：制作人数量' },
-  { value: 'totalDownloads', label: '自动：累计下载' },
-  { value: 'totalUsers', label: '自动：注册用户' }
 ]
 
 const linkGroupOptions: { value: FooterLinkGroup; label: string }[] = [
@@ -42,7 +32,7 @@ const linkGroupOptions: { value: FooterLinkGroup; label: string }[] = [
   { value: 'support', label: '支持' }
 ]
 
-const activeTab = ref<TabKey>('license')
+const activeTab = ref<TabKey>('cta')
 const config = ref<HomeFooterConfig | null>(null)
 const faqs = ref<FooterFaq[]>([])
 const subscriptions = ref<Subscription[]>([])
@@ -126,58 +116,6 @@ async function saveConfig() {
   } finally {
     saving.value = false
   }
-}
-
-function addLicenseCard() {
-  config.value?.licenseCards.push({
-    id: `card-${Date.now()}`,
-    icon: '🎵',
-    title: '新授权方式',
-    description: '',
-    ctaText: '了解详情',
-    ctaUrl: '',
-    sortOrder: config.value.licenseCards.length + 1,
-    isActive: true
-  })
-}
-
-function removeLicenseCard(index: number) {
-  config.value?.licenseCards.splice(index, 1)
-}
-
-function moveLicenseCard(index: number, direction: -1 | 1) {
-  if (!config.value) return
-  const target = index + direction
-  if (target < 0 || target >= config.value.licenseCards.length) return
-  const items = config.value.licenseCards
-  const [moved] = items.splice(index, 1)
-  items.splice(target, 0, moved)
-  items.forEach((item, i) => (item.sortOrder = i + 1))
-}
-
-function addStat() {
-  config.value?.stats.push({
-    id: `stat-${Date.now()}`,
-    label: '新指标',
-    value: '',
-    auto: 'none',
-    sortOrder: config.value.stats.length + 1,
-    isActive: true
-  })
-}
-
-function removeStat(index: number) {
-  config.value?.stats.splice(index, 1)
-}
-
-function moveStat(index: number, direction: -1 | 1) {
-  if (!config.value) return
-  const target = index + direction
-  if (target < 0 || target >= config.value.stats.length) return
-  const items = config.value.stats
-  const [moved] = items.splice(index, 1)
-  items.splice(target, 0, moved)
-  items.forEach((item, i) => (item.sortOrder = i + 1))
 }
 
 function addLink() {
@@ -265,7 +203,7 @@ onMounted(load)
     <div class="toolbar">
       <div class="toolbar-copy">
         <h2>首页尾部内容管理</h2>
-        <p>配置 PC 端首页尾部的授权说明、入驻入口、数据背书、底部导航、合规信息与常见问题。</p>
+        <p>配置 PC 端首页尾部的入驻入口、底部导航、合规信息与常见问题。</p>
       </div>
       <button v-if="activeTab !== 'faqs' && activeTab !== 'subscriptions'" class="btn-primary" :disabled="saving || !config" @click="saveConfig">
         {{ saving ? '保存中...' : '保存配置' }}
@@ -288,57 +226,8 @@ onMounted(load)
     <div v-if="loading" class="loading-hint">加载中...</div>
 
     <div v-else-if="config" class="tab-content">
-      <!-- 授权卡片 -->
-      <div v-if="activeTab === 'license'" class="panel">
-        <div class="panel-header">
-          <div>
-            <h3>授权方式卡片</h3>
-            <p>通常为：个人非商用 / 商用 License / 独家买断。</p>
-          </div>
-          <button class="btn-ghost" @click="addLicenseCard">+ 新增卡片</button>
-        </div>
-        <div v-for="(card, index) in config.licenseCards" :key="card.id" class="editable-block">
-          <div class="block-head">
-            <span>卡片 {{ index + 1 }}</span>
-            <div class="block-actions">
-              <button class="btn-icon" title="上移" @click="moveLicenseCard(index, -1)">↑</button>
-              <button class="btn-icon" title="下移" @click="moveLicenseCard(index, 1)">↓</button>
-              <button class="btn-icon danger" title="删除" @click="removeLicenseCard(index)">×</button>
-            </div>
-          </div>
-          <div class="form-grid">
-            <div class="form-item narrow">
-              <label>图标</label>
-              <input v-model="card.icon" class="form-input" placeholder="🎧" />
-            </div>
-            <div class="form-item">
-              <label>标题</label>
-              <input v-model="card.title" class="form-input" />
-            </div>
-            <div class="form-item">
-              <label>按钮文案</label>
-              <input v-model="card.ctaText" class="form-input" />
-            </div>
-            <div class="form-item">
-              <label>按钮链接</label>
-              <input v-model="card.ctaUrl" class="form-input" placeholder="/vip" />
-            </div>
-            <div class="form-item form-span-2">
-              <label>描述</label>
-              <textarea v-model="card.description" class="form-textarea" rows="2"></textarea>
-            </div>
-            <div class="form-item">
-              <label class="checkbox-label">
-                <input v-model="card.isActive" type="checkbox" />
-                <span>启用</span>
-              </label>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- 入驻 CTA -->
-      <div v-else-if="activeTab === 'cta'" class="panel">
+      <div v-if="activeTab === 'cta'" class="panel">
         <div class="panel-header">
           <div>
             <h3>制作人入驻入口</h3>
@@ -453,49 +342,6 @@ onMounted(load)
               <input v-model="config.chartsSection.isActive" type="checkbox" />
               <span>启用该区块</span>
             </label>
-          </div>
-        </div>
-      </div>
-
-      <!-- 数据背书 -->
-      <div v-else-if="activeTab === 'stats'" class="panel">
-        <div class="panel-header">
-          <div>
-            <h3>数据背书指标</h3>
-            <p>可选择自动统计，或手动填写展示数值。</p>
-          </div>
-          <button class="btn-ghost" @click="addStat">+ 新增指标</button>
-        </div>
-        <div v-for="(stat, index) in config.stats" :key="stat.id" class="editable-block">
-          <div class="block-head">
-            <span>指标 {{ index + 1 }}</span>
-            <div class="block-actions">
-              <button class="btn-icon" title="上移" @click="moveStat(index, -1)">↑</button>
-              <button class="btn-icon" title="下移" @click="moveStat(index, 1)">↓</button>
-              <button class="btn-icon danger" title="删除" @click="removeStat(index)">×</button>
-            </div>
-          </div>
-          <div class="form-grid">
-            <div class="form-item">
-              <label>标签</label>
-              <input v-model="stat.label" class="form-input" />
-            </div>
-            <div class="form-item">
-              <label>数值来源</label>
-              <select v-model="stat.auto" class="form-input">
-                <option v-for="opt in statAutoOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-              </select>
-            </div>
-            <div v-if="stat.auto === 'none'" class="form-item">
-              <label>手动数值</label>
-              <input v-model="stat.value" class="form-input" />
-            </div>
-            <div class="form-item">
-              <label class="checkbox-label">
-                <input v-model="stat.isActive" type="checkbox" />
-                <span>启用</span>
-              </label>
-            </div>
           </div>
         </div>
       </div>
