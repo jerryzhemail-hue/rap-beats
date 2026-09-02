@@ -102,7 +102,7 @@ start_backend() {
     info "安装后端依赖..."
     (cd "$SERVER_DIR" && npm install)
   fi
-  info "启动后端（nohup，日志 $SERVER_LOG）..."
+  info "启动后端（nohup，日志 ${SERVER_LOG}）..."
   ( cd "$SERVER_DIR" && nohup node --import tsx/esm src/index.ts > "$SERVER_LOG" 2>&1 & echo $! > "$SERVER_PID" )
   for i in $(seq 1 40); do
     if backend_ready; then log "后端就绪 http://localhost:3000"; return 0; fi
@@ -123,7 +123,7 @@ start_frontend() {
     info "安装前端依赖..."
     (cd "$CLIENT_DIR" && npm install)
   fi
-  info "启动前端（nohup，日志 $CLIENT_LOG）..."
+  info "启动前端（nohup，日志 ${CLIENT_LOG}）..."
   ( cd "$CLIENT_DIR" && nohup ./node_modules/.bin/vite > "$CLIENT_LOG" 2>&1 & echo $! > "$CLIENT_PID" )
   for i in $(seq 1 40); do
     if port_listening 5173; then log "前端就绪 http://localhost:5173"; return 0; fi
