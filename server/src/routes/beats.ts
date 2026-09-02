@@ -230,7 +230,9 @@ router.get('/beats', optionalAuth, async (req: AuthRequest, res: Response) => {
   popularSince.setDate(popularSince.getDate() - 7);
   const popularSinceText = toDateTimeString(popularSince);
 
-  const conditions: string[] = [];
+  // 全部伴奏：只显示管理员上传的作品（creator_role = 'admin'）。
+  // Beatmaker 原创作品请使用 /api/beats/beatmaker。
+  const conditions: string[] = ["b.creator_role = 'admin'"];
   const params: unknown[] = [];
 
   if (genre) {
@@ -371,17 +373,139 @@ router.get('/beats', optionalAuth, async (req: AuthRequest, res: Response) => {
   });
 });
 
+// GET /api/beats/beatmaker - 获取所有 Beatmaker 原创作品
+router.get('/beats/beatmaker', optionalAuth, async (req: AuthRequest, res: Response) => {
+  const database = getDatabaseClient();
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 12));
+  const offset = (page - 1) * limit;
+
+  const { genre, bpm_min, bpm_max, key, search, is_free, sort } = req.query as Record<string, string>;
+
+  // 筛选条件：只取 creator_role = 'beatmaker' 的作品
+  const conditions: string[] = ["b.creator_role = 'beatmaker'"];
+  const params: unknown[] = [];
+
+  if (genre) {
+    conditions.push('b.genre = ?');
+    params.push(genre);
+  }
+  if (bpm_min) {
+    conditions.push('b.bpm >= ?');
+    params.push(parseInt(bpm_min));
+  }
+  if (bpm_max) {
+    conditions.push('b.bpm <= ?');
+    params.push(parseInt(bpm_max));
+  }
+  if (key) {
+    conditions.push('b.`key` = ?');
+    params.push(key);
+  }
+  if (search) {
+    conditions.push('(b.title LIKE ? OR b.producer LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  if (is_free === '1') {
+    conditions.push('b.is_free = 1');
+  }
+
+  const where = `WHERE ${conditions.join(' AND ')}`;
+
+  // JOIN beatmaker_profiles 获取上传者信息
+  const fromClause = `
+    FROM beats b
+    LEFT JOIN beatmaker_profiles bp ON bp.user_id = b.uploaded_by
+    LEFT JOIN users u ON u.id = b.uploaded_by
+    LEFT JOIN (
+      SELECT beat_id, COUNT(*) AS favorite_count
+      FROM favorites
+      GROUP BY beat_id
+    ) fav ON fav.beat_id = b.id`;
+
+  const selectClause = `
+    SELECT b.*,
+           bp.display_name AS beatmaker_display_name,
+           bp.avatar_url AS beatmaker_avatar,
+           bp.portfolio_url,
+           COALESCE(fav.favorite_count, 0) AS favorite_count`;
+
+  // 排序
+  const orderBy = sort === 'popular'
+    ? 'ORDER BY b.download_count DESC, fav.favorite_count DESC, b.created_at DESC, b.id DESC'
+    : 'ORDER BY b.created_at DESC, b.id DESC';
+
+  const total = (await database.queryOne<{ count: number }>(
+    `SELECT COUNT(*) as count FROM beats b ${where}`,
+    params
+  ))?.count ?? 0;
+
+  const beats = await database.queryMany<any>(
+    `${selectClause} ${fromClause} ${where} ${orderBy} LIMIT ? OFFSET ?`,
+    [...params, limit, offset]
+  );
+
+  // 登录用户批量查询收藏状态
+  let favoriteIds: Set<number> = new Set();
+  if (req.user && beats.length > 0) {
+    const beatIds = beats.map((b: any) => b.id);
+    const placeholders = beatIds.map(() => '?').join(',');
+    const favs = await database.queryMany<{ beat_id: number }>(
+      `SELECT beat_id FROM favorites WHERE user_id = ? AND beat_id IN (${placeholders})`,
+      [req.user.id, ...beatIds]
+    );
+    favoriteIds = new Set(favs.map((f) => f.beat_id));
+  }
+
+  res.json({
+    beats: beats.map((b: any) => serializeBeatAssets({
+      ...b,
+      is_favorited: favoriteIds.has(b.id)
+    })),
+    total,
+    page,
+    totalPages: Math.ceil(total / limit)
+  });
+});
+
 // GET /api/beats/:id
 router.get('/beats/:id', optionalAuth, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
-  const beat = await database.queryOne<BeatRecord>('SELECT * FROM beats WHERE id = ?', [req.params.id]);
+  // 查询 beat 并 LEFT JOIN 创作者资料（优先取 beatmaker_profiles.display_name，其次 users.username）
+  const beat = await database.queryOne<any>(
+    `SELECT b.*,
+            bp.display_name AS creator_display_name,
+            bp.avatar_url AS creator_avatar,
+            CASE WHEN bp.user_id IS NOT NULL THEN 1 ELSE 0 END AS creator_is_beatmaker,
+            u.username AS creator_username
+       FROM beats b
+       LEFT JOIN beatmaker_profiles bp ON bp.user_id = b.uploaded_by
+       LEFT JOIN users u ON u.id = b.uploaded_by
+      WHERE b.id = ?`,
+    [req.params.id]
+  );
   if (!beat) {
     res.status(404).json({ error: 'Beat not found' });
     return;
   }
+  // 规整 creator_* 字段：把 null 变成 undefined，display_name 为空时 fallback 到 creator_username
+  beat.creator_display_name = beat.creator_display_name || beat.creator_username || beat.producer;
+  beat.creator_is_beatmaker = Boolean(beat.creator_is_beatmaker);
+  // serializeBeatAssets 已经处理 cover_image + tags 两个字段
+  // 把 beat 里多出来的 creator_avatar 也送进去（需要被 sign）
+  const serialized = serializeBeatAssets({ ...beat, is_favorited: false });
+  // 单独给 creator_avatar 签名（因为 serializeBeatAssets 只处理 cover_image）
+  if (serialized.creator_avatar) {
+    serialized.creator_avatar = getSignedAssetUrl('avatar', serialized.creator_avatar, {
+      expiresInSeconds: 60 * 60 * 24 * 7
+    });
+  }
+  // 不要把内部 JOIN 字段暴露出去
+  delete serialized.creator_username;
+
   // VIP专属内容访问控制
   const vipLevel = await getUserVipLevel(req);
-  if (beat.is_vip_only && !canAccessVipContent(vipLevel)) {
+  if (serialized.is_vip_only && !canAccessVipContent(vipLevel)) {
     return res.status(403).json({
       error: '此伴奏为高级专属内容，请升级至高级或至尊会员',
       code: 'VIP_ONLY',
@@ -397,7 +521,8 @@ router.get('/beats/:id', optionalAuth, async (req: AuthRequest, res: Response) =
     );
     isFavorited = !!favorite;
   }
-  res.json(serializeBeatAssets({ ...beat, is_favorited: isFavorited }));
+  serialized.is_favorited = isFavorited;
+  res.json(serialized);
 });
 
 // GET /api/beats/:id/stream
@@ -755,12 +880,18 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
 router.get('/home/public', async (_req: Request, res: Response) => {
   const database = getDatabaseClient();
 
+  // 首页「最新/热门/免费」均只展示官方（管理员上传）作品，
+  // Beatmaker 原创作品请在 /beats 页的「原创 Beatmaker 作品」Tab 查看。
+  const ADMIN_ONLY = "b.creator_role = 'admin'";
+
   // 最新伴奏
   const latestBeats = await database.queryMany<any>(`
     SELECT b.id, b.title, b.producer, b.genre, b.bpm, b.\`key\`, b.duration,
            b.cover_image, b.is_free, b.is_vip_only,
+           b.uploaded_by, b.creator_role,
            COALESCE(b.download_count, 0) as download_count
     FROM beats b
+    WHERE ${ADMIN_ONLY}
     ORDER BY b.created_at DESC
     LIMIT 6
   `);
@@ -769,8 +900,10 @@ router.get('/home/public', async (_req: Request, res: Response) => {
   const popularBeats = await database.queryMany<any>(`
     SELECT b.id, b.title, b.producer, b.genre, b.bpm, b.\`key\`, b.duration,
            b.cover_image, b.is_free, b.is_vip_only,
+           b.uploaded_by, b.creator_role,
            COALESCE(b.download_count, 0) as download_count
     FROM beats b
+    WHERE ${ADMIN_ONLY}
     ORDER BY b.download_count DESC
     LIMIT 6
   `);
@@ -779,26 +912,41 @@ router.get('/home/public', async (_req: Request, res: Response) => {
   const freeBeats = await database.queryMany<any>(`
     SELECT b.id, b.title, b.producer, b.genre, b.bpm, b.\`key\`, b.duration,
            b.cover_image, b.is_free, b.is_vip_only,
+           b.uploaded_by, b.creator_role,
            COALESCE(b.download_count, 0) as download_count
     FROM beats b
-    WHERE b.is_free = 1
+    WHERE ${ADMIN_ONLY} AND b.is_free = 1
     ORDER BY b.created_at DESC
     LIMIT 6
   `);
 
-  // 人气 Rapper（按 sort_order 排序，取前 8 位）
+  // 人气 Rapper（真实人气算法 = play_count*1 + download_count*3 + beat_count*5，二级排序保留运营置顶 sort_order）
+  // 注意：play_events 表只累计历史播放增量；真正的实热在 beats.play_count 上（由 /api/beats/:id/play-events 自动 +1）
   const rappers = await database.queryMany<any>(`
-    SELECT r.id, r.name, r.avatar_url, r.bio, COUNT(bp.beat_id) AS beat_count
+    SELECT
+      r.id,
+      r.name,
+      r.avatar_url,
+      r.bio,
+      COUNT(DISTINCT bp.beat_id)                                AS beat_count,
+      COALESCE(SUM(b.play_count),     0)                        AS total_plays,
+      COALESCE(SUM(b.download_count), 0)                        AS total_downloads,
+      (
+        COALESCE(SUM(b.play_count),     0) * 1
+        + COALESCE(SUM(b.download_count), 0) * 3
+        + COUNT(DISTINCT bp.beat_id) * 5
+      )                                                         AS popularity
     FROM rappers r
     LEFT JOIN beat_producers bp ON bp.rapper_id = r.id
+    LEFT JOIN beats b           ON b.id = bp.beat_id
     GROUP BY r.id, r.name, r.avatar_url, r.bio
-    ORDER BY r.sort_order ASC, beat_count DESC
+    ORDER BY r.sort_order ASC, popularity DESC, total_downloads DESC, beat_count DESC
     LIMIT 8
   `);
 
-  // 热门标签（从 beats.tags 聚合，JSON 数组字段）
+  // 热门标签（仅统计官方伴奏库，避免被 Beatmaker 作品污染官方标签）
   const tagRows = await database.queryMany<{ tags: string | null }>(
-    `SELECT tags FROM beats WHERE tags IS NOT NULL AND tags != '' AND tags != '[]'`
+    `SELECT tags FROM beats WHERE creator_role = 'admin' AND tags IS NOT NULL AND tags != '' AND tags != '[]'`
   );
   const tagCount: Record<string, number> = {};
   for (const row of tagRows) {
@@ -1113,6 +1261,17 @@ router.post('/beats/:id/play-events', playEventLimiter, optionalAuth, async (req
     'INSERT INTO play_events (user_id, beat_id) VALUES (?, ?)',
     [userId, beatId]
   );
+
+  // 同步累加 beats.play_count，供"人气 Rapper"模块的真实人气公式使用
+  try {
+    await database.execute(
+      'UPDATE beats SET play_count = play_count + 1 WHERE id = ?',
+      [beatId]
+    );
+  } catch (err) {
+    // play_count 列可能尚未存在（旧库一次性回填失败时不阻塞接口）
+    console.warn('[rapbeats] play_count 自增失败(可忽略):', (err as Error).message);
+  }
 
   // 自动更新关联 rapper 的权重
   if (beat.rapper) {

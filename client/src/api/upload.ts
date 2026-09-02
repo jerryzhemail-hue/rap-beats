@@ -171,7 +171,7 @@ export function detectBpmFromFile(
       } else {
         try {
           const data = JSON.parse(xhr.responseText)
-          reject(new Error(data.error || '识别失败'))
+          reject(new Error(data.error || data.message || '识别失败'))
         } catch {
           reject(new Error('识别失败'))
         }

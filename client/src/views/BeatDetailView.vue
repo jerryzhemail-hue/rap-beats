@@ -40,7 +40,19 @@ onMounted(async () => {
     return
   }
   try {
-    beat.value = await fetchBeat(id)
+    const fetched = await fetchBeat(id)
+    // 双保险：后端 tags 列有时是 JSON 字符串，确保前端始终拿到 string[]
+    if (fetched && typeof fetched.tags === 'string') {
+      try {
+        const parsed = JSON.parse(fetched.tags)
+        fetched.tags = Array.isArray(parsed) ? parsed.filter((t) => typeof t === 'string') : []
+      } catch {
+        fetched.tags = []
+      }
+    } else if (fetched && !Array.isArray(fetched.tags)) {
+      fetched.tags = []
+    }
+    beat.value = fetched
   } catch (err: any) {
     if (err?.message?.includes('VIP') || err?.message?.includes('专属')) {
       vipOnlyBlocked.value = true
@@ -182,6 +194,33 @@ async function toggleFavorite() {
           />
         </div>
         <div class="detail-info">
+          <!-- 创作者身份条：头像 + 名字 + Beatmaker 徽章，点击跳创作者主页 -->
+          <router-link
+            v-if="beat.uploaded_by"
+            :to="`/beatmaker/profile/${beat.uploaded_by}`"
+            class="creator-row"
+          >
+            <img
+              v-if="beat.creator_avatar"
+              :src="beat.creator_avatar"
+              class="creator-avatar"
+            />
+            <div v-else class="creator-avatar creator-avatar-fallback">
+              {{ (beat.creator_display_name || beat.producer || '?').charAt(0).toUpperCase() }}
+            </div>
+            <span class="creator-name">
+              {{ beat.creator_display_name || beat.producer }}
+            </span>
+            <span
+              v-if="beat.creator_is_beatmaker"
+              class="creator-badge"
+            >Beatmaker</span>
+            <span
+              v-else-if="beat.creator_role === 'admin'"
+              class="creator-badge creator-badge-admin"
+            >Admin</span>
+          </router-link>
+
           <h1 class="detail-title">{{ beat.title }}</h1>
           <p class="detail-producer">{{ beat.producer }}</p>
 
@@ -345,6 +384,69 @@ async function toggleFavorite() {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.creator-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  transition: color 0.15s ease;
+}
+
+.creator-row:hover {
+  color: var(--accent);
+}
+
+.creator-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.creator-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #6366f1, #a855f7);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.creator-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.creator-row:hover .creator-name {
+  color: var(--accent);
+}
+
+.creator-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  letter-spacing: 0.3px;
+}
+
+.creator-badge-admin {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
 }
 
 .detail-title {

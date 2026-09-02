@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useBeatsStore } from '@/stores/beats'
 import { fetchRappers } from '@/api/rappers'
+import { fetchBeatmakerBeats } from '@/api/beats'
 import SearchBar from '@/components/SearchBar.vue'
 import FilterBar from '@/components/FilterBar.vue'
 import BeatCard from '@/components/BeatCard.vue'
@@ -11,10 +12,17 @@ import RapperChannel from '@/components/RapperChannel.vue'
 const route = useRoute()
 const router = useRouter()
 const beatsStore = useBeatsStore()
-const activeTab = ref<'all' | 'rappers'>('all')
+const activeTab = ref<'all' | 'rappers' | 'beatmaker'>('all')
 const searchQuery = ref('')
 const rappers = ref<any[]>([])
 const rappersLoading = ref(false)
+
+// Beatmaker 作品相关状态
+const beatmakerBeats = ref<any[]>([])
+const beatmakerLoading = ref(false)
+const beatmakerPage = ref(1)
+const beatmakerTotalPages = ref(1)
+const beatmakerTotal = ref(0)
 
 // Check if search is active
 const isSearchActive = computed(() => searchQuery.value.length > 0)
@@ -111,7 +119,16 @@ watch(() => route.query, (query) => {
 })
 
 watch(() => beatsStore.page, () => {
-  beatsStore.loadBeats()
+  if (activeTab.value === 'all') {
+    beatsStore.loadBeats()
+  }
+})
+
+// Beatmaker Tab 专用分页
+watch(beatmakerPage, () => {
+  if (activeTab.value === 'beatmaker') {
+    loadBeatmakerBeats()
+  }
 })
 
 async function loadRappers() {
@@ -123,6 +140,20 @@ async function loadRappers() {
     console.error('Failed to load rappers:', e)
   } finally {
     rappersLoading.value = false
+  }
+}
+
+async function loadBeatmakerBeats() {
+  try {
+    beatmakerLoading.value = true
+    const res = await fetchBeatmakerBeats({ page: beatmakerPage.value, limit: 12 })
+    beatmakerBeats.value = res.beats || []
+    beatmakerTotal.value = res.total || 0
+    beatmakerTotalPages.value = res.totalPages || 1
+  } catch (e) {
+    console.error('Failed to load beatmaker beats:', e)
+  } finally {
+    beatmakerLoading.value = false
   }
 }
 
@@ -142,17 +173,33 @@ function goToPage(p: number) {
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
-function switchTab(tab: 'all' | 'rappers') {
+function goToBeatmakerPage(p: number) {
+  if (p < 1 || p > beatmakerTotalPages.value) return
+  beatmakerPage.value = p
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function switchTab(tab: 'all' | 'rappers' | 'beatmaker') {
   activeTab.value = tab
   if (tab === 'all') {
     // Clear rapper filter when switching to all
     beatsStore.setFilter('rapper', undefined)
     beatsStore.loadBeats()
+  } else if (tab === 'beatmaker') {
+    // Load beatmaker beats when switching
+    if (beatmakerBeats.value.length === 0) {
+      loadBeatmakerBeats()
+    }
   }
 }
 
 function goToRapper(id: number) {
   router.push(`/rapper/${id}`)
+}
+
+// Beatmaker 详情页跳转
+function goToBeatmakerProfile(userId: number) {
+  router.push(`/beatmaker/profile/${userId}`)
 }
 </script>
 
@@ -177,7 +224,19 @@ function goToRapper(id: number) {
             <circle cx="6" cy="18" r="3"/>
             <circle cx="18" cy="16" r="3"/>
           </svg>
-          全部伴奏
+          官方伴奏库
+        </button>
+        <button 
+          class="tab-btn"
+          :class="{ active: activeTab === 'beatmaker' }"
+          @click="switchTab('beatmaker')"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+          原创Beatmaker作品
         </button>
         <button 
           class="tab-btn"
@@ -194,6 +253,9 @@ function goToRapper(id: number) {
         </button>
       </div>
     </div>
+
+    <!-- Main Content Container with 75% width -->
+    <div class="beats-content-container">
 
     <!-- All Beats Tab -->
     <template v-if="activeTab === 'all'">
@@ -254,7 +316,7 @@ function goToRapper(id: number) {
                 <circle cx="6" cy="18" r="3"/>
                 <circle cx="18" cy="16" r="3"/>
               </svg>
-              相关伴奏
+              相关官方伴奏
             </h2>
             <span class="section-count">{{ filteredBeats.length }} 首</span>
           </div>
@@ -312,13 +374,97 @@ function goToRapper(id: number) {
       </template>
     </template>
 
+    <!-- Beatmaker Tab -->
+    <template v-else-if="activeTab === 'beatmaker'">
+      <!-- Beatmaker Section Header -->
+      <div class="section-header beatmaker-section-header">
+        <h2 class="section-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+          原创Beatmaker作品
+        </h2>
+        <span class="section-count">{{ beatmakerTotal }} 首</span>
+      </div>
+
+      <!-- Loading state -->
+      <div v-if="beatmakerLoading" class="beats-grid">
+        <div v-for="n in 8" :key="n" class="skeleton-card">
+          <div class="skeleton skeleton-cover"></div>
+          <div class="skeleton-card-info">
+            <div class="skeleton skeleton-text" style="width: 70%"></div>
+            <div class="skeleton skeleton-text" style="width: 50%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Empty state -->
+      <div v-else-if="beatmakerBeats.length === 0" class="empty-state">
+        <div class="empty-icon">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <p>暂无原创Beatmaker作品</p>
+        <p class="empty-hint">成为认证Beatmaker，上传你的原创作品</p>
+        <button class="btn btn-primary" @click="$router.push('/beatmaker/apply')">
+          申请成为Beatmaker
+        </button>
+      </div>
+
+      <!-- Beatmaker Beats Grid -->
+      <div v-else class="beats-grid">
+        <BeatCard
+          v-for="beat in beatmakerBeats"
+          :key="beat.id"
+          :beat="beat"
+        />
+      </div>
+
+      <!-- Pagination -->
+      <div v-if="beatmakerTotalPages > 1" class="pagination">
+        <button
+          class="page-btn"
+          :disabled="beatmakerPage <= 1"
+          @click="goToBeatmakerPage(beatmakerPage - 1)"
+        >
+          ‹
+        </button>
+        <template v-for="p in beatmakerTotalPages" :key="p">
+          <button
+            v-if="p === 1 || p === beatmakerTotalPages || Math.abs(p - beatmakerPage) <= 1"
+            class="page-btn"
+            :class="{ active: p === beatmakerPage }"
+            @click="goToBeatmakerPage(p)"
+          >
+            {{ p }}
+          </button>
+          <span v-else-if="Math.abs(p - beatmakerPage) === 2" class="page-dots">...</span>
+        </template>
+        <button
+          class="page-btn"
+          :disabled="beatmakerPage >= beatmakerTotalPages"
+          @click="goToBeatmakerPage(beatmakerPage + 1)"
+        >
+          ›
+        </button>
+      </div>
+    </template>
+
     <!-- Rapper Channel Tab -->
     <RapperChannel v-else />
+    
+    </div><!-- End of beats-content-container -->
   </div>
 </template>
 
 <style scoped>
 .beats-view {
+  width: 100%;
   max-width: 1200px;
   margin: 0 auto;
   padding: 32px 24px;
@@ -614,4 +760,5 @@ function goToRapper(id: number) {
     font-size: 16px;
   }
 }
+
 </style>

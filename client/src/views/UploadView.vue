@@ -546,7 +546,7 @@ async function submitUpload() {
 
 .upload-container {
   width: 100%;
-  max-width: 900px;
+  max-width: 82%;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius);

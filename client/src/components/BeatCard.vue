@@ -111,10 +111,12 @@ function handleLicenseCancelled() {
           </svg>
         </button>
       </div>
-      <span v-if="rank" class="rank-badge">TOP {{ rank }}</span>
-      <span class="bpm-badge">{{ beat.bpm }} BPM</span>
-      <span v-if="beat.is_free" class="free-badge" :class="{ 'with-rank': rank }">FREE</span>
-      <span v-if="beat.is_vip_only" class="vip-badge" :class="{ 'with-rank': rank }">VIP</span>
+      <div class="badges-row">
+        <span v-if="rank" class="rank-badge">TOP {{ rank }}</span>
+        <span v-if="beat.is_free" class="free-badge">FREE</span>
+        <span v-if="beat.is_vip_only" class="vip-badge">VIP</span>
+        <span class="bpm-badge">{{ beat.bpm }} BPM</span>
+      </div>
       <button class="favorite-btn" :class="{ active: beat.is_favorited }" @click.stop="toggleFavorite">
         <span v-if="beat.is_favorited">❤️</span>
         <span v-else>🤍</span>
@@ -129,7 +131,22 @@ function handleLicenseCancelled() {
     </div>
     <div class="card-info">
       <h3 class="card-title">{{ beat.title }}</h3>
-      <p class="card-producer">{{ beat.producer }}</p>
+      <div class="card-producer-row">
+        <router-link
+          v-if="beat.uploaded_by"
+          :to="`/beatmaker/profile/${beat.uploaded_by}`"
+          class="card-producer"
+        >{{ beat.producer }}</router-link>
+        <span v-else class="card-producer">{{ beat.producer }}</span>
+        <span
+          v-if="beat.creator_role === 'beatmaker' || beat.creator_is_beatmaker"
+          class="beatmaker-badge"
+          title="认证 Beatmaker 原创制作人"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          Beatmaker
+        </span>
+      </div>
       <div class="card-meta">
         <span class="genre-tag">{{ beat.genre }}</span>
         <span class="key-tag">{{ beat.key }}</span>
@@ -213,10 +230,18 @@ function handleLicenseCancelled() {
   transform: scale(1.1);
 }
 
-.bpm-badge {
+.badges-row {
   position: absolute;
   top: 8px;
   left: 8px;
+  right: 56px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  z-index: 2;
+}
+
+.bpm-badge {
   background: rgba(0, 0, 0, 0.7);
   color: #fff;
   font-size: 11px;
@@ -227,9 +252,6 @@ function handleLicenseCancelled() {
 }
 
 .rank-badge {
-  position: absolute;
-  top: 8px;
-  left: 8px;
   background: linear-gradient(135deg, #f59e0b, #ef4444);
   color: #fff;
   font-size: 10px;
@@ -237,13 +259,9 @@ function handleLicenseCancelled() {
   padding: 4px 9px;
   border-radius: 999px;
   letter-spacing: 0.8px;
-  z-index: 2;
 }
 
 .free-badge {
-  position: absolute;
-  top: 8px;
-  left: 8px;
   background: #16a34a;
   color: #fff;
   font-size: 10px;
@@ -253,15 +271,7 @@ function handleLicenseCancelled() {
   letter-spacing: 1px;
 }
 
-.free-badge.with-rank,
-.vip-badge.with-rank {
-  top: 38px;
-}
-
 .vip-badge {
-  position: absolute;
-  top: 8px;
-  left: 8px;
   background: #f59e0b;
   color: #fff;
   font-size: 10px;
@@ -269,7 +279,6 @@ function handleLicenseCancelled() {
   padding: 3px 8px;
   border-radius: 4px;
   letter-spacing: 1px;
-  z-index: 2;
 }
 
 .favorite-btn {
@@ -329,13 +338,50 @@ function handleLicenseCancelled() {
   text-overflow: ellipsis;
 }
 
+.card-producer-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  width: 100%;
+  min-width: 0;
+}
+
 .card-producer {
   font-size: 13px;
   color: var(--text-secondary);
-  margin: 0 0 10px;
+  margin: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-decoration: none;
+  transition: color 0.15s ease;
+  max-width: 160px;
+}
+
+.card-producer.router-link-active {
+  color: inherit;
+}
+
+.card-producer:hover {
+  color: var(--accent);
+}
+
+.beatmaker-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  letter-spacing: 0.3px;
+  line-height: 1.4;
+  cursor: default;
+  user-select: none;
 }
 
 .card-meta {

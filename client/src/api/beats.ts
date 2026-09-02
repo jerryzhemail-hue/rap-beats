@@ -17,6 +17,9 @@ export interface HomePublicResponse {
     avatar_url: string | null
     bio: string | null
     beat_count: number
+    total_plays?: number
+    total_downloads?: number
+    popularity?: number
   }>
   tags: Array<{ tag: string; count: number }>
   forumPosts: Array<{
@@ -51,6 +54,35 @@ export async function fetchBeats(params: BeatsFilters & { page?: number; limit?:
 
   const query = searchParams.toString()
   const url = `/api/beats${query ? `?${query}` : ''}`
+
+  return request<BeatsResponse>(url)
+}
+
+// 获取 Beatmaker 原创作品列表
+export async function fetchBeatmakerBeats(params: {
+  page?: number
+  limit?: number
+  genre?: string
+  bpm_min?: number
+  bpm_max?: number
+  key?: string
+  search?: string
+  is_free?: number
+  sort?: string
+} = {}): Promise<BeatsResponse> {
+  const searchParams = new URLSearchParams()
+  if (params.page) searchParams.set('page', String(params.page))
+  if (params.limit) searchParams.set('limit', String(params.limit))
+  if (params.genre) searchParams.set('genre', params.genre)
+  if (params.bpm_min !== undefined) searchParams.set('bpm_min', String(params.bpm_min))
+  if (params.bpm_max !== undefined) searchParams.set('bpm_max', String(params.bpm_max))
+  if (params.key) searchParams.set('key', params.key)
+  if (params.search) searchParams.set('search', params.search)
+  if (params.is_free !== undefined) searchParams.set('is_free', String(params.is_free))
+  if (params.sort) searchParams.set('sort', params.sort)
+
+  const query = searchParams.toString()
+  const url = `/api/beats/beatmaker${query ? `?${query}` : ''}`
 
   return request<BeatsResponse>(url)
 }

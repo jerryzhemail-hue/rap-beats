@@ -20,7 +20,8 @@ export async function updateRapperSortOrderByName(rapperName: string): Promise<v
   if (!rapper) return;
   
   // 查询该 rapper 的各项统计数据
-  // 注意：beats 表没有 play_count 列，播放量从 play_events 表聚合
+  // 优先使用 beats.play_count（由 /api/beats/:id/play-events 实时累加，更高效）
+  // beats 表的 play_count 从历史 play_events 回填，为兼容旧数据 fallback 到 play_events 聚合
   const stats = await db.queryOne<{
     beat_count: number;
     play_count: number;
@@ -28,14 +29,14 @@ export async function updateRapperSortOrderByName(rapperName: string): Promise<v
     favorite_count: number;
   }>(`
     SELECT
-      COUNT(DISTINCT b.id) as beat_count,
-      COALESCE((SELECT COUNT(*) FROM play_events pe WHERE pe.beat_id IN (SELECT id FROM beats WHERE rapper = ?)), 0) as play_count,
-      COALESCE(SUM(b.download_count), 0) as download_count,
-      COUNT(DISTINCT f.id) as favorite_count
+      COUNT(DISTINCT b.id)                                             AS beat_count,
+      COALESCE(SUM(b.play_count), 0)                                 AS play_count,
+      COALESCE(SUM(b.download_count), 0)                              AS download_count,
+      COUNT(DISTINCT f.id)                                            AS favorite_count
     FROM beats b
     LEFT JOIN favorites f ON f.beat_id = b.id
     WHERE b.rapper = ?
-  `, [rapperName, rapperName]);
+  `, [rapperName]);
 
   const score = 
     (stats?.beat_count || 0) * RAPPER_WEIGHTS.beat_count +

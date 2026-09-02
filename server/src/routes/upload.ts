@@ -129,7 +129,8 @@ async function createBeatRecord(
   payload: BeatUploadPayload,
   audioPath: string,
   coverImage: string | null,
-  uploadedBy: number
+  uploadedBy: number,
+  creatorRole: 'admin' | 'beatmaker' = 'admin'
 ) {
   // 解析所有 producer 名字（支持 & 分隔的合作作品）
   const allProducerNames: string[] = [];
@@ -165,8 +166,8 @@ async function createBeatRecord(
 
   const result = await database.execute(
     `
-      INSERT INTO beats (id, title, producer, rapper, bpm, \`key\`, genre, tags, duration, file_path, cover_image, is_free, download_count, uploaded_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+      INSERT INTO beats (id, title, producer, rapper, bpm, \`key\`, genre, tags, duration, file_path, cover_image, is_free, download_count, uploaded_by, creator_role)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
     `,
     [
       nextId,
@@ -181,7 +182,8 @@ async function createBeatRecord(
       audioPath,
       coverImage,
       payload.is_free === '1' || payload.is_free === 'true' || payload.is_free === true || payload.is_free === 1 ? 1 : 0,
-      uploadedBy
+      uploadedBy,
+      creatorRole
     ]
   );
 
@@ -298,6 +300,9 @@ router.post('/beats/upload', requireUploader, upload.fields([
       })).storedValue;
     }
 
+    // 根据当前用户身份决定 creator_role：admin 上传为 'admin'，Beatmaker 上传为 'beatmaker'
+    const creatorRole = req.user!.role === 'admin' ? 'admin' : 'beatmaker';
+
     const result = await createBeatRecord(
       database,
       {
@@ -314,7 +319,8 @@ router.post('/beats/upload', requireUploader, upload.fields([
       },
       audioAsset.storedValue,
       coverFilename,
-      req.user!.id
+      req.user!.id,
+      creatorRole
     );
 
     if (!result.insertId) {
@@ -389,10 +395,12 @@ router.post('/beats/upload-direct', requireUploader, async (req: AuthRequest, re
 
     // 只创建一个 beat 记录（多制作人/rapper 共享同一个伴奏文件）
     const nextId2 = await getNextBeatId(database);
+    // 根据当前用户身份决定 creator_role：admin 上传为 'admin'，Beatmaker 上传为 'beatmaker'
+    const creatorRole2 = req.user!.role === 'admin' ? 'admin' : 'beatmaker';
     const result = await database.execute(
       `
-        INSERT INTO beats (id, title, producer, rapper, bpm, \`key\`, genre, tags, duration, file_path, cover_image, is_free, download_count, uploaded_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        INSERT INTO beats (id, title, producer, rapper, bpm, \`key\`, genre, tags, duration, file_path, cover_image, is_free, download_count, uploaded_by, creator_role)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
       `,
       [
         nextId2,
@@ -407,7 +415,8 @@ router.post('/beats/upload-direct', requireUploader, async (req: AuthRequest, re
         audio_file_path,
         finalCoverImage,
         is_free === '1' || is_free === 'true' || is_free === true || is_free === 1 ? 1 : 0,
-        req.user!.id
+        req.user!.id,
+        creatorRole2
       ]
     );
 
