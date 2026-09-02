@@ -21,6 +21,14 @@ export interface Beat {
   is_vip_only?: boolean
   is_favorited?: boolean
   created_at: string
+  uploaded_by?: number
+  creator_role?: 'beatmaker' | 'admin' | 'user'
+  /** 创作者展示名（优先 beatmaker_profiles.display_name，fallback users.username → producer） */
+  creator_display_name?: string
+  /** 创作者头像（已签名的可访问 URL） */
+  creator_avatar?: string | null
+  /** 创作者是否是认证 Beatmaker */
+  creator_is_beatmaker?: boolean
 }
 
 export interface BeatsResponse {

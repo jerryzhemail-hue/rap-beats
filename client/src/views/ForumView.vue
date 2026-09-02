@@ -653,6 +653,7 @@ function nextImage() {
 <style scoped>
 /* 布局 */
 .forum-page {
+  width:82%;
   display: grid;
   grid-template-columns: 200px 1fr 260px;
   gap: 20px;

@@ -1275,6 +1275,7 @@ const defaultCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="htt
 
 <style scoped>
 .profile-page {
+  width:80%;
   padding-top: 40px;
   padding-bottom: 80px;
   min-height: calc(100vh - 64px);

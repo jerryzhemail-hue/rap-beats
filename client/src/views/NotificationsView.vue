@@ -18,9 +18,11 @@ import {
   type SystemNotification,
 } from '@/api/system-notifications'
 import { useNotificationsStore } from '@/stores/notifications'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
 const notificationsStore = useNotificationsStore()
+const authStore = useAuthStore()
 
 // Tab state: 'system' | 'forum'
 const activeTab = ref<'system' | 'forum'>('system')
@@ -239,7 +241,17 @@ function goToForumTarget(n: ForumNotification) {
 function goToSystemTarget(n: SystemNotification) {
   if (!n.is_read) handleSystemRead(n.id)
   if (n.type === 'beatmaker_approved') {
-    router.push('/beatmaker/profile')
+    /**
+     * 审核通过后跳转到「当前用户自己的 Beatmaker 主页」
+     * 路由要求 :userId 参数，因此从 authStore 取登录用户 id 拼接。
+     * 若用户态未就绪（极端情况），兜底跳到 Beatmaker 列表页（能看到自己的卡片）。
+     */
+    const userId = authStore.user?.id
+    if (userId != null) {
+      router.push(`/beatmaker/profile/${userId}`)
+    } else {
+      router.push('/beatmakers')
+    }
   } else if (n.type === 'beatmaker_rejected') {
     router.push('/beatmaker/apply')
   }

@@ -597,4 +597,48 @@ router.get('/admin/license-agreements/export', requireAdmin, async (req: AuthReq
   res.send(csv);
 });
 
+// POST /api/admin/cleanup-missing-beats — 临时端点：清理本地文件缺失的 beats
+router.post('/admin/cleanup-missing-beats', requireAdmin, async (req: AuthRequest, res) => {
+  const database = getDatabaseClient();
+  const ids: number[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  if (ids.length === 0) {
+    return res.status(400).json({ error: 'ids 不能为空' });
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+
+  try {
+    await database.execute('START TRANSACTION');
+
+    const [licRows] = [await database.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM beat_license_agreements WHERE beat_id IN (${placeholders})`,
+      ids
+    )].map(r => r ?? { count: 0 });
+
+    const [beatRows] = [await database.queryOne<{ count: number }>(
+      `SELECT COUNT(*) as count FROM beats WHERE id IN (${placeholders})`,
+      ids
+    )].map(r => r ?? { count: 0 });
+
+    await database.execute(`DELETE FROM beat_license_agreements WHERE beat_id IN (${placeholders})`, ids);
+    await database.execute(`DELETE FROM beats WHERE id IN (${placeholders})`, ids);
+
+    const [afterTotal] = [await database.queryOne<{ count: number }>(
+      'SELECT COUNT(*) as count FROM beats'
+    )].map(r => r ?? { count: 0 });
+
+    await database.execute('COMMIT');
+
+    return res.json({
+      ok: true,
+      deleted_beats: beatRows.count,
+      deleted_license_agreements: licRows.count,
+      remaining_beats: afterTotal.count,
+    });
+  } catch (err: any) {
+    try { await database.execute('ROLLBACK'); } catch {}
+    return res.status(500).json({ error: err?.message || 'delete failed' });
+  }
+});
+
 export default router;

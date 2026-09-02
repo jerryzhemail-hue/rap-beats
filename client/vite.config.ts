@@ -34,9 +34,6 @@ export default defineConfig(({ mode }) => {
     server: {
       strictPort: false,
       port: 5173,
-      hmr: {
-        port: 5173,
-      },
       watch: {
         // 排除不需要监听的文件，减少文件系统开销，提升 HMR 响应速度
         ignored: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/dist-ssr/**'],

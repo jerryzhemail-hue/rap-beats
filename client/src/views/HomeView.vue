@@ -116,6 +116,13 @@ onMounted(async () => {
   }
 })
 
+// 格式化热度数值（>10000 显示 X.X 万）
+function formatPopularity(n: number): string {
+  if (!n) return '0'
+  if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万'
+  return String(n)
+}
+
 watch([banners, currentBannerIndex, isHeroHovered], () => {
   scheduleNextBanner()
 })
@@ -307,7 +314,12 @@ function onForumPostClick(postId: number) {
           </div>
           <div class="rapper-info">
             <span class="rapper-name">{{rapper.name}}</span>
-            <span class="rapper-count">{{rapper.beat_count}} 首</span>
+            <span class="rapper-count" v-if="rapper.total_plays > 0">
+              🔥 {{ formatPopularity(rapper.total_plays) }} 播放 · {{ rapper.beat_count }} 首
+            </span>
+            <span class="rapper-count" v-else>
+              {{ rapper.beat_count }} 首
+            </span>
           </div>
         </div>
       </div>
@@ -649,17 +661,15 @@ function onForumPostClick(postId: number) {
   border-radius: 999px;
 }
 
-/* Rapper row */
+/* Rapper grid */
 .rapper-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
-  overflow-x: auto;
   padding-bottom: 8px;
-  scrollbar-width: thin;
 }
 
 .rapper-card {
-  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -670,7 +680,7 @@ function onForumPostClick(postId: number) {
   border-radius: var(--radius);
   cursor: pointer;
   transition: all 0.2s ease;
-  min-width: 120px;
+  min-width: 0;
   text-align: center;
 }
 
@@ -793,6 +803,10 @@ function onForumPostClick(postId: number) {
 
 @media (max-width: 1024px) {
   .beats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .rapper-row {
     grid-template-columns: repeat(2, 1fr);
   }
 

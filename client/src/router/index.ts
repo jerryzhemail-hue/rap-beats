@@ -12,8 +12,9 @@ const router = createRouter({
     { path: '/', component: HomeView, meta: { public: true } },
     { path: '/login', component: LoginView, meta: { guest: true } },
     { path: '/register', component: RegisterView, meta: { guest: true } },
-    { path: '/beats', component: BeatsView, meta: { requiresAuth: true, moduleKey: 'nav_beats' } },
-    { path: '/beats/:id', component: () => import('@/views/BeatDetailView.vue'), meta: { requiresAuth: true, moduleKey: 'nav_beats' } },
+    // 伴奏库：游客可浏览/试听，收藏、下载、VIP 专属在组件内单独检查
+    { path: '/beats', component: BeatsView, meta: { public: true, moduleKey: 'nav_beats' } },
+    { path: '/beats/:id', component: () => import('@/views/BeatDetailView.vue'), meta: { public: true, moduleKey: 'nav_beats' } },
     { path: '/rapper/:id', component: () => import('../views/RapperDetailView.vue') },
     {
       path: '/upload',
@@ -143,8 +144,14 @@ const router = createRouter({
   }
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore()
+
+  // 在做路由级鉴权前，等待首次认证恢复完成，避免刷新 /upload、/profile 等需要登录态的页面
+  // 时被错误地跳到 /login（因为 user 还在异步从 /api/auth/me 拉取）
+  if (to.meta.requiresAuth || to.meta.requiresAdmin || to.meta.requiresUploader || to.meta.guest) {
+    await authStore.init()
+  }
 
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     return { path: '/login', query: { redirect: to.fullPath, requireAuth: '1' } }

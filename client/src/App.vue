@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useMessagesStore } from '@/stores/messages'
 import { useNotificationsStore } from '@/stores/notifications'
 import { useHomepageConfigStore } from '@/stores/homepage-config'
+import { fetchMembershipBannerStatus, recordMembershipBannerShown } from '@/api/membership-banner'
 
 const route = useRoute()
 const playerStore = usePlayerStore()
@@ -54,12 +55,31 @@ watch(
   { immediate: true }
 )
 
-// 首次访问自动弹出，10 秒后自动关闭
+// 会员权益弹框：按 IP 24h 冷却,同一 IP 在冷却窗口内只弹一次
+async function tryShowMembershipBanner() {
+  try {
+    const status = await fetchMembershipBannerStatus()
+    if (!status.shouldShow) return
+    // 立即落库记录,避免下一帧竞态再弹一次
+    recordMembershipBannerShown().catch((err) => {
+      console.warn('[membership-banner] record failed:', err)
+    })
+    showMembershipBanner.value = true
+    setTimeout(() => {
+      showMembershipBanner.value = false
+    }, 10000)
+  } catch (err) {
+    console.warn('[membership-banner] status query failed, fallback to show:', err)
+    // 接口异常时保持原有体验,避免完全屏蔽弹框
+    showMembershipBanner.value = true
+    setTimeout(() => {
+      showMembershipBanner.value = false
+    }, 10000)
+  }
+}
+
 onMounted(() => {
-  showMembershipBanner.value = true
-  setTimeout(() => {
-    showMembershipBanner.value = false
-  }, 10000)
+  void tryShowMembershipBanner()
 })
 
 onUnmounted(() => {

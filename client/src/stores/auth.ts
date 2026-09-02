@@ -10,6 +10,10 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
   const token = ref<string | null>(null)
 
+  // 用于等待首次认证恢复完成，避免刷新需要登录态的页面时被错误地跳到 /login
+  // 保存同一个 Promise，多个调用方 await 到的都是同一份结果
+  let initPromise: Promise<void> | null = null
+
   const isAuthenticated = computed(() => !!token.value && !!user.value)
   const isAdmin = computed(() => user.value?.role === 'admin')
   const isBeatmaker = computed(() => user.value?.is_beatmaker === 1)
@@ -68,17 +72,21 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function init() {
-    const savedToken = localStorage.getItem(TOKEN_KEY)
-    if (!savedToken) return
-
-    token.value = savedToken
-    try {
-      const data = await request<{ user: User }>('/api/auth/me')
-      user.value = data.user
-    } catch {
-      clearAuth()
-    }
+  async function init(): Promise<void> {
+    // 多次调用复用同一个 Promise，避免并发触发 /api/auth/me
+    if (initPromise) return initPromise
+    initPromise = (async () => {
+      const savedToken = localStorage.getItem(TOKEN_KEY)
+      if (!savedToken) return
+      token.value = savedToken
+      try {
+        const data = await request<{ user: User }>('/api/auth/me')
+        user.value = data.user
+      } catch {
+        clearAuth()
+      }
+    })()
+    return initPromise
   }
 
   return {

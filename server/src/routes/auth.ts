@@ -108,7 +108,10 @@ router.post('/register', registerLimiter, async (req, res) => {
 
 // POST /api/auth/login
 router.post('/login', loginLimiter, async (req, res) => {
-  const { login, password } = req.body as { login?: string; password?: string };
+  const rawBody = req.body as { login?: string; password?: string; username?: string; email?: string };
+  // 兼容前端用 login / username / email 任一参数名提交
+  const login = rawBody.login ?? rawBody.username ?? rawBody.email;
+  const password = rawBody.password;
 
   if (!login || !password) {
     return res.status(400).json({ error: '请填写用户名/邮箱和密码' });

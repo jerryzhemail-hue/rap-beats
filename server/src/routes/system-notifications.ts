@@ -52,7 +52,8 @@ router.get('/unread-count', requireAuth, async (req: AuthRequest, res: Response)
 router.put('/:id/read', requireAuth, async (req: AuthRequest, res: Response) => {
   const db = getDatabaseClient();
   const userId = req.user!.id;
-  const id = parseInt(req.params.id, 10);
+  const rawId = req.params.id;
+  const id = parseInt(Array.isArray(rawId) ? rawId[0] : rawId, 10);
   if (!id || isNaN(id)) return res.status(400).json({ error: '无效的 id' });
 
   await db.execute(
@@ -80,7 +81,8 @@ router.put('/read-all', requireAuth, async (req: AuthRequest, res: Response) => 
 router.delete('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   const db = getDatabaseClient();
   const userId = req.user!.id;
-  const id = parseInt(req.params.id, 10);
+  const rawId = req.params.id;
+  const id = parseInt(Array.isArray(rawId) ? rawId[0] : rawId, 10);
   if (!id || isNaN(id)) return res.status(400).json({ error: '无效的 id' });
 
   await db.execute(

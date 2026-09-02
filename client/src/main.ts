@@ -9,8 +9,10 @@ const app = createApp(App)
 const pinia = createPinia()
 app.use(pinia)
 app.use(router)
-app.mount('#app')
 
-// 认证初始化在 mount 之后异步进行，不阻塞页面渲染和 HMR
+// 在挂载前同步触发认证初始化（init 内部用 Promise 复用，多次调用安全）。
+// 这样路由解析时 user 已经被恢复，避免刷新 /upload 等页面被误判为未登录跳转到 /login。
 const authStore = useAuthStore()
-authStore.init()
+authStore.init().finally(() => {
+  app.mount('#app')
+})

@@ -28,12 +28,20 @@ export async function request<T>(url: string, options: RequestOptions = {}): Pro
   })
 
   if (res.status === 401) {
-    // 只有已登录用户才处理 401
+    let message = '未授权，请重新登录'
+    try {
+      const errorData = await res.json()
+      if (errorData.error || errorData.message) {
+        message = errorData.error || errorData.message
+      }
+    } catch {
+      // ignore parse error
+    }
     if (authStore.isAuthenticated) {
       authStore.logout()
       router.push('/login')
     }
-    throw new Error('未授权，请重新登录')
+    throw new Error(message)
   }
 
   if (!res.ok) {
