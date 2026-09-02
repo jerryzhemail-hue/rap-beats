@@ -81,3 +81,8 @@ monitor/state.json
 # Python 字节码缓存
 __pycache__/
 *.pyc
+
+# pnpm (项目用 npm，忽略误生成的 pnpm 产物)
+.pnpm-store/
+pnpm-lock.yaml
+pnpm-workspace.yaml

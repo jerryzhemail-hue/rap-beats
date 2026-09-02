@@ -8,7 +8,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>cd /Users/wangzhe/Documents/work/rap-beats/server &amp;&amp; exec /usr/local/bin/node --import tsx/esm src/index.ts</string>
+        <string>cd /Users/wangzhe/Documents/work/rap-beats/server &amp;&amp; exec ./node_modules/.bin/tsx watch --clear-screen=false src/index.ts</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/wangzhe/Documents/work/rap-beats/server</string>
