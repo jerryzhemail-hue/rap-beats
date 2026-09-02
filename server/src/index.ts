@@ -114,6 +114,9 @@ async function startServer() {
   const homepageConfigRouter = (await import('./routes/homepage-config.js')).default;
   app.use('/api/homepage-config', homepageConfigRouter);
 
+  const membershipBannerRouter = (await import('./routes/membership-banner.js')).default;
+  app.use('/api/membership-banner', membershipBannerRouter);
+
   const systemNotificationsRouter = (await import('./routes/system-notifications.js')).default;
   app.use('/api/system-notifications', systemNotificationsRouter);
 
