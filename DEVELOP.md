@@ -17,7 +17,17 @@
 
 ## 快速开始
 
-### 1. 启动本地 MySQL
+### 一键启动（推荐）
+
+```bash
+./start-dev.sh
+```
+
+会自动启动：Colima → 3307 MySQL 容器 → 后端(3000) → 前端(5173)。
+
+### 手动分步启动
+
+#### 1. 启动本地 MySQL（3307）
 
 ```bash
 docker compose -f docker-compose.dev.yml up -d mysql
@@ -25,7 +35,7 @@ docker compose -f docker-compose.dev.yml up -d mysql
 
 等待 15 秒让 MySQL 初始化完成。
 
-### 2. 启动后端
+#### 2. 启动后端
 
 ```bash
 cd server
@@ -34,7 +44,7 @@ npm run dev
 
 后端会运行在 `http://localhost:3000`
 
-### 3. 启动前端
+#### 3. 启动前端
 
 ```bash
 cd client
@@ -45,9 +55,18 @@ npm run dev
 
 ---
 
-## 使用部署脚本（推荐）
+## 使用部署脚本
 
-一键启动所有本地服务：
+一键启动所有本地服务（推荐 `./start-dev.sh`）：
+
+```bash
+./start-dev.sh        # 启动（唯一 dev 库 3307）
+./start-dev.sh stop   # 停止后端/前端
+./start-dev.sh status # 查看状态
+./start-dev.sh logs   # 查看日志
+```
+
+或使用部署脚本（`deploy.sh` 的 local 子命令已转发到 `start-dev.sh`）：
 
 ```bash
 ./deploy.sh local
@@ -139,14 +158,13 @@ cp .env.production .env
 # 然后修改数据库配置为本地配置
 ```
 
-### Q: 端口 3306/3307 被占用
+### Q: 端口 3307 被占用
 
 ```bash
 # 查看端口占用
-lsof -i :3306
 lsof -i :3307
 
-# 如果 3306 被占用，可以修改 docker-compose.dev.yml 中的端口映射
+# 如果 3307 被占用，可以修改 docker-compose.dev.yml 中的端口映射（同时改 server/.env 的 DB_PORT）
 ```
 
 ### Q: 前端代理不生效

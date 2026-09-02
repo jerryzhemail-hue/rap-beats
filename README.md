@@ -17,7 +17,7 @@
 说明：
 
 - 项目后端目前仅支持 `MySQL`（`mysql2/promise`）
-- 本地开发使用独立 MySQL（端口 3307 或 3306，看 `.env` 写法）
+- 本地开发使用独立 MySQL（**唯一 dev 库：端口 3307**，Docker/Colima 容器）
 - 生产使用 MySQL 容器或独立库
 
 ## 首次安装依赖
@@ -36,66 +36,50 @@ npm install
 
 ## 后端环境变量
 
-后端环境变量文件位于 `server/.env`（**推荐**，与 README 的所有命令一致）或项目根目录的 `.env`（CWD 启动时会被 dotenv 加载）。
+后端环境变量文件位于 `server/.env`（**推荐**）。
 
-仓库里提供了样例文件：
+本地开发请直接复制本地模板（唯一 dev 库 = **3307**）：
 
-- `server/.env.example`：MySQL 配置样例
-- `server/.env.mysql.example`：精简 MySQL 样例
+```bash
+cp server/.env.dev.example server/.env
+```
 
-### 方案一：使用 MySQL（唯一支持的方式）
-
-推荐方式：
-
-1. 复制 `server/.env.example` 的内容到 `server/.env`
-2. 按你的本地数据库配置修改以下字段
+默认配置已对接 `docker-compose.dev.yml` 起的 3307 MySQL：
 
 ```env
 DB_DRIVER=mysql
 DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=your-password
-DB_NAME=rap_beats
+DB_PORT=3307
+DB_USER=dev_user
+DB_PASSWORD=dev_pass_2024
+DB_NAME=rap_beats_dev
 FORUM_DB_NAME=rap_beats_forum
-```
-
-如果你还需要支付或 OSS，请继续补充：
-
-```env
-XUNHU_APPID=你的应用ID
-XUNHU_APPSECRET=你的应用密钥
-CLIENT_URL=http://localhost:5173
-BASE_URL=http://localhost:3000
-
+MEMBERSHIP_DB_NAME=rap_beats_membership
 STORAGE_DRIVER=local
 ```
 
-如果你要使用阿里云 OSS：
-
-```env
-STORAGE_DRIVER=oss
-OSS_REGION=oss-cn-hangzhou
-OSS_BUCKET=your-bucket-name
-OSS_ACCESS_KEY_ID=your-access-key-id
-OSS_ACCESS_KEY_SECRET=your-access-key-secret
-OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com
-OSS_PUBLIC_BASE_URL=https://your-cdn-domain.com
-OSS_AUDIO_PREFIX=audio
-OSS_COVER_PREFIX=covers
-OSS_AVATAR_PREFIX=avatars
-OSS_BANNER_PREFIX=banners
-OSS_FORUM_IMAGE_PREFIX=forum-images
-OSS_FORUM_AUDIO_PREFIX=forum-audio
-OSS_FORUM_VIDEO_PREFIX=forum-video
-OSS_FORUM_VIDEO_COVER_PREFIX=forum-video-covers
-```
+> ⚠️ `server/.env.example` 是**生产模板**（DB_NAME=rap_beats、端口 3306、STORAGE_DRIVER=oss），
+> 不要复制到本地 dev 环境。
+>
+> 本地开发无需真实支付/OSS。如确需阿里云 OSS，再补充 OSS_* 配置（参考 `.env.production`）。
 
 ## 启动项目
 
-项目需要分别启动前端和后端。
+### 一键启动（推荐）
 
-### 1. 启动后端
+```bash
+./start-dev.sh
+```
+
+会自动依次完成：启动 Colima → 3307 MySQL 容器 → 后端(3000) → 前端(5173)。
+
+> 停止：`./start-dev.sh stop`；状态：`./start-dev.sh status`；日志：`./start-dev.sh logs`
+
+### 手动分别启动
+
+项目也可以分别启动前端和后端。
+
+#### 1. 启动后端
 
 ```bash
 cd server
@@ -108,7 +92,7 @@ npm run dev
 http://localhost:3000
 ```
 
-### 2. 启动前端
+#### 2. 启动前端
 
 新开一个终端窗口：
 
@@ -305,7 +289,13 @@ crontab -e
 
 ## 快速启动清单
 
-如果你已经配好环境变量，最常用的启动步骤就是：
+一键启动（推荐）：
+
+```bash
+./start-dev.sh
+```
+
+如果已经配好环境变量，手动启动：
 
 ```bash
 cd server

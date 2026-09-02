@@ -48,91 +48,20 @@ check_docker() {
 # 本地 Docker 开发环境
 # ============================================================
 start_local_dev() {
-    check_docker
-    log "启动本地开发环境（独立数据库）..."
-
-    # 启动本地 MySQL
-    log "启动本地 MySQL（端口 3307）..."
-    docker compose -f "$DEV_COMPOSE_FILE" up -d mysql
-
-    log "等待 MySQL 初始化（约 15 秒）..."
-    sleep 15
-
-    # 检查 MySQL 是否就绪
-    local retries=15
-    while [ $retries -gt 0 ]; do
-        if docker exec rap-beats-dev-mysql mysqladmin ping -h localhost --silent 2>/dev/null; then
-            log "MySQL 已就绪 ✅"
-            break
-        fi
-        retries=$((retries - 1))
-        if [ $retries -eq 0 ]; then
-            err "MySQL 启动失败"
-            exit 1
-        fi
-        echo -e "${YELLOW}等待 MySQL... ($retries)${NC}"
-        sleep 2
-    done
-
-    # 启动后端服务（在后台）
-    log "启动后端服务..."
-    cd server
-    npm run dev &
-    cd ..
-
-    # 等待后端启动
-    log "等待后端服务..."
-    sleep 5
-
-    # 检查后端健康状态
-    retries=15
-    while [ $retries -gt 0 ]; do
-        if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
-            log "后端服务健康 ✅"
-            break
-        fi
-        retries=$((retries - 1))
-        if [ $retries -eq 0 ]; then
-            warn "后端可能还未就绪，请查看终端日志"
-            break
-        fi
-        echo -e "${YELLOW}等待后端... ($retries)${NC}"
-        sleep 2
-    done
-
-    echo ""
-    log "本地开发环境已启动！"
-    echo ""
-    echo "访问地址："
-    echo "  前端：http://localhost:5173"
-    echo "  后端：http://localhost:3000"
-    echo "  MySQL： localhost:3307"
-    echo ""
-    info "启动前端：cd client && npm run dev"
-    echo ""
-    info "常用命令："
-    echo "  ./deploy.sh local-stop    # 停止本地服务"
-    echo "  ./deploy.sh local-clean   # 清理本地数据库"
-    echo "  docker compose -f $DEV_COMPOSE_FILE logs -f  # 查看 MySQL 日志"
+    log "启动本地开发环境（唯一 dev 库：3307）..."
+    ./start-dev.sh start
 }
 
 stop_local_dev() {
     log "停止本地服务..."
-
-    # 停止后端进程
-    pkill -f "tsx watch src/index.ts" 2>/dev/null || true
-
-    # 停止 MySQL
-    docker compose -f "$DEV_COMPOSE_FILE" down 2>/dev/null || true
-
-    log "本地服务已停止"
+    ./start-dev.sh stop
 }
 
 clean_local_dev() {
     log "清理本地开发环境..."
     read -p "确认清理？这会删除本地数据库数据！[y/N]：" confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        pkill -f "tsx watch src/index.ts" 2>/dev/null || true
+        ./start-dev.sh stop 2>/dev/null || true
         docker compose -f "$DEV_COMPOSE_FILE" down -v
         log "清理完成"
     else
