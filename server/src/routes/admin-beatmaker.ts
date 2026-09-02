@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAdmin, AuthRequest } from '../middleware/auth.js';
 import { getDatabaseClient } from '../database/client.js';
-import { decryptIdCard, maskIdCard } from '../utils/idcard-cipher.js';
+import { decryptIdCard, maskIdCard, hashIdCard } from '../utils/idcard-cipher.js';
 import { createSystemNotification } from './system-notifications-helper.js';
 
 const router = Router();
@@ -231,47 +231,136 @@ router.post('/:id/approve', requireAdmin, async (req: AuthRequest, res: Response
     status: string;
     portfolio_url: string | null;
     sample_work_url: string | null;
+    sample_audio_url: string | null;
     bio: string | null;
+    id_card_no_enc: string | null;
   }>(
-    'SELECT id, user_id, real_name, status, portfolio_url, sample_work_url, bio FROM beatmaker_applications WHERE id = ?',
+    'SELECT id, user_id, real_name, status, portfolio_url, sample_work_url, sample_audio_url, bio, id_card_no_enc FROM beatmaker_applications WHERE id = ?',
     [id]
   );
   if (!app) return res.status(404).json({ error: '申请不存在' });
   if (app.status === 'approved') return res.status(409).json({ error: '该申请已通过' });
+  if (app.status === 'rejected') return res.status(409).json({ error: '该申请已被驳回，请先重新提交' });
+
+  // ─── 账号级 1:1：用户必须不是已认证状态（防止管理员绕过申请入口直接 approve 导致不一致）
+  const userState = await database.queryOne<{ is_beatmaker: number; username: string }>(
+    'SELECT is_beatmaker, username FROM users WHERE id = ?',
+    [app.user_id]
+  );
+  if (!userState) return res.status(404).json({ error: '申请人账号不存在' });
+  if (userState.is_beatmaker === 1) {
+    return res.status(409).json({
+      error: '该账号已是 Beatmaker，一个账号只能拥有一个认证身份',
+      code: 'ACCOUNT_ALREADY_BEATMAKER'
+    });
+  }
+
+  // ─── 身份证级 1:1：如果申请包含已加密身份证号，需要反算 hash，并校验
+  // 1) 其他账号的 applications 已存在 approved（并发下另一个管理员刚通过了）
+  // 2) 其他账号的 beatmaker_profiles 已经绑定此证件号
+  let idCardHash: string | null = null;
+  if (app.id_card_no_enc) {
+    try {
+      const plain = decryptIdCard(app.id_card_no_enc);
+      idCardHash = hashIdCard(plain);
+      // 回写 hash（兼容历史申请数据，后续 approve 才能走唯一索引）
+      await database.execute('UPDATE beatmaker_applications SET id_card_hash = ? WHERE id = ?', [idCardHash, id]);
+    } catch (_) {
+      idCardHash = null;
+    }
+  }
+
+  if (idCardHash) {
+    const conflictApproved = await database.queryOne<{ user_id: number }>(
+      "SELECT user_id FROM beatmaker_applications WHERE status = 'approved' AND id_card_hash = ? LIMIT 1",
+      [idCardHash]
+    );
+    if (conflictApproved && conflictApproved.user_id !== app.user_id) {
+      return res.status(409).json({
+        error: '该身份证号已通过另一个账号的 Beatmaker 认证，一个身份证号只能认证一个账号',
+        code: 'IDCARD_ALREADY_APPROVED'
+      });
+    }
+    const conflictProfile = await database.queryOne<{ user_id: number }>(
+      'SELECT user_id FROM beatmaker_profiles WHERE id_card_hash = ? LIMIT 1',
+      [idCardHash]
+    );
+    if (conflictProfile && conflictProfile.user_id !== app.user_id) {
+      return res.status(409).json({
+        error: '该身份证号已绑定到其他 Beatmaker 账号，一个身份证号只能认证一个账号',
+        code: 'IDCARD_ALREADY_BOUND'
+      });
+    }
+  }
 
   const now = new Date();
-  // 1. 标记 users.is_beatmaker = 1
-  await database.execute(
-    'UPDATE users SET is_beatmaker = 1, beatmaker_certified_at = ? WHERE id = ?',
-    [now, app.user_id]
-  );
-  // 2. 写入 beatmaker_profiles
-  await database.execute(
-    `INSERT INTO beatmaker_profiles
-       (user_id, display_name, avatar_url, bio, portfolio_url, sample_audio_url, certified_at)
-     VALUES (?, ?, NULL, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       display_name = VALUES(display_name),
-       bio = VALUES(bio),
-       portfolio_url = VALUES(portfolio_url),
-       sample_audio_url = VALUES(sample_audio_url),
-       certified_at = VALUES(certified_at)`,
-    [app.user_id, app.real_name, app.bio, app.portfolio_url, app.sample_work_url, now]
-  );
-  // 3. 更新申请状态
-  await database.execute(
-    `UPDATE beatmaker_applications
-        SET status = 'approved', reviewed_by = ?, reviewed_at = ?
-      WHERE id = ?`,
-    [reviewerId, now, id]
-  );
+  try {
+    // 1. 标记 users.is_beatmaker = 1
+    await database.execute(
+      'UPDATE users SET is_beatmaker = 1, beatmaker_certified_at = ? WHERE id = ?',
+      [now, app.user_id]
+    );
+    // 2. 写入 beatmaker_profiles（主键 user_id 保证 1:1；UNIQUE id_card_hash 保证证件唯一）
+    await database.execute(
+      `INSERT INTO beatmaker_profiles
+         (user_id, display_name, avatar_url, bio, portfolio_url, sample_audio_url, certified_at, id_card_hash)
+       VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         display_name = VALUES(display_name),
+         bio = VALUES(bio),
+         portfolio_url = VALUES(portfolio_url),
+         sample_audio_url = VALUES(sample_audio_url),
+         certified_at = VALUES(certified_at),
+         id_card_hash = VALUES(id_card_hash)`,
+      [app.user_id, app.real_name, app.bio, app.portfolio_url, app.sample_audio_url ?? app.sample_work_url, now, idCardHash]
+    );
+    // 3. 更新申请状态
+    await database.execute(
+      `UPDATE beatmaker_applications
+          SET status = 'approved', reviewed_by = ?, reviewed_at = ?
+        WHERE id = ?`,
+      [reviewerId, now, id]
+    );
+  } catch (error: any) {
+    // 唯一索引命中（主键 user_id 冲突 / id_card_hash 冲突）→ 翻译成 409
+    if (error?.code === 'ER_DUP_ENTRY' || Number(error?.errno) === 1062) {
+      const keyName = String(error?.sqlMessage || '');
+      if (keyName.includes('id_card_hash')) {
+        // 回滚 users.is_beatmaker（避免写了一半）
+        await database.execute(
+          'UPDATE users SET is_beatmaker = 0, beatmaker_certified_at = NULL WHERE id = ?',
+          [app.user_id]
+        ).catch(() => {});
+        return res.status(409).json({
+          error: '该身份证号已绑定到其他 Beatmaker 账号，一个身份证号只能认证一个账号',
+          code: 'IDCARD_ALREADY_BOUND'
+        });
+      }
+      if (keyName.includes('approved_id_card')) {
+        return res.status(409).json({
+          error: '该身份证号刚刚已被另一个账号完成认证，一个身份证号只能认证一个账号',
+          code: 'IDCARD_ALREADY_APPROVED'
+        });
+      }
+      // PRIMARY 冲突：profile 已经存在，意味着并发下其他 approve 先成功
+      await database.execute(
+        'UPDATE users SET is_beatmaker = 0, beatmaker_certified_at = NULL WHERE id = ?',
+        [app.user_id]
+      ).catch(() => {});
+      return res.status(409).json({
+        error: '该账号已完成 Beatmaker 认证，无需重复审核',
+        code: 'ACCOUNT_ALREADY_BEATMAKER'
+      });
+    }
+    throw error;
+  }
 
   // 4. 发送系统通知给申请人
   await createSystemNotification(
     app.user_id,
     'beatmaker_approved',
     '🎉 Beatmaker 认证已通过',
-    '恭喜！你的认证申请已通过审核，现在可以上传原创伴奏、建立制作人主页、展示作品集了。',
+    `恭喜！你已完成账号与 Beatmaker 身份的一对一绑定（账号：${userState.username}），现在可以上传原创伴奏、建立制作人主页、展示作品集了。`,
     reviewerId,
     'beatmaker_application',
     id
@@ -282,7 +371,7 @@ router.post('/:id/approve', requireAdmin, async (req: AuthRequest, res: Response
   createAdminNotification({
     type: 'beatmaker_approved',
     title: 'Beatmaker 认证通过',
-    content: `申请 ID ${id} 已通过审核`,
+    content: `申请 ID ${id} 已通过审核（账号与身份证一对一绑定校验已通过）`,
     data: { applicationId: id, userId: app.user_id, reviewerId }
   }).catch(() => {});
 

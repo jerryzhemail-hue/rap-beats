@@ -29,3 +29,16 @@ export function maskIdCard(plain: string): string {
   if (!plain || plain.length < 8) return '****';
   return `${plain.slice(0, 4)}${'*'.repeat(Math.max(plain.length - 8, 4))}${plain.slice(-4)}`;
 }
+
+/**
+ * 身份证号不可逆哈希（SHA-256 + 固定 pepper）。
+ * 用于"一个身份证号只能绑定到一个账号"的去重查询：
+ * 同明文 → 同哈希，不同明文 → 极低概率碰撞。
+ */
+const IDCARD_HASH_PEPPER = process.env.BEATMAKER_IDCARD_PEPPER || 'dev-idcard-pepper-please-change';
+export function hashIdCard(plain: string): string {
+  return crypto
+    .createHash('sha256')
+    .update(`${IDCARD_HASH_PEPPER}:${plain.trim().toUpperCase()}`)
+    .digest('hex');
+}

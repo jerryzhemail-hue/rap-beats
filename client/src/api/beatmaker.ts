@@ -15,6 +15,11 @@ export interface BeatmakerProfile {
   total_beats: number;
   total_likes: number;
   total_downloads: number;
+  follower_count: number;
+  following_count: number;
+  is_following: boolean;
+  is_followed_by: boolean;
+  is_self: boolean;
 }
 
 export interface BeatmakerListItem {
@@ -121,6 +126,13 @@ export async function fetchBeatmakerList() {
 
 export async function fetchBeatmakerProfile(userId: number) {
   return request<{ profile: BeatmakerProfile }>(`/api/beatmaker/profile/${userId}`);
+}
+
+export async function fetchBeatmakerBeats(userId: number, page = 1, limit = 12) {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return request<{ beats: Array<any>; total: number; page: number; totalPages: number }>(
+    `/api/beatmaker/profile/${userId}/beats?${query.toString()}`
+  );
 }
 
 export async function updateMyBeatmakerProfile(data: {

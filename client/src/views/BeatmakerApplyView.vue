@@ -30,6 +30,7 @@ const audioUploading = ref(false)
 const audioUploadProgress = ref(0)
 const audioError = ref('')
 const isDragging = ref(false)
+const audioInputRef = ref<HTMLInputElement | null>(null)
 
 const existingApp = computed(() => beatmakerStore.myApplication)
 const isApproved = computed(() => auth.isBeatmaker)
@@ -146,6 +147,17 @@ async function handleSubmit() {
   errorMsg.value = ''
   successMsg.value = ''
 
+  // 账号级 1:1：已认证用户不允许提交（避免绕过入口的直接 POST 尝试）
+  if (isApproved.value) {
+    errorMsg.value = '你已是认证 Beatmaker，一个账号只能拥有一个认证身份'
+    return
+  }
+
+  if (isPending.value) {
+    errorMsg.value = '你已有待审核的申请，请耐心等待'
+    return
+  }
+
   if (!canResubmit.value && isRejected.value) {
     errorMsg.value = `被驳回后 ${3} 天内不可重复申请，请耐心等待`
     return
@@ -172,9 +184,17 @@ async function handleSubmit() {
       bio: form.bio.trim(),
       sample_audio_url: form.sample_audio_url || undefined,
     })
-    successMsg.value = '申请已提交，请等待管理员审核'
+    successMsg.value = '申请已提交，请等待管理员审核（一个账号仅可认证一个 Beatmaker 身份）'
   } catch (err: any) {
-    errorMsg.value = err.message || '提交失败，请稍后重试'
+    const rawMsg: string = err?.message || '提交失败，请稍后重试'
+    errorMsg.value = rawMsg
+    // 若账号已被后端判定为已认证，主动重拉一次 auth 的 me 信息来同步 isBeatmaker
+    if (
+      rawMsg.includes('已经是认证 Beatmaker') ||
+      rawMsg.includes('一个账号只能拥有一个认证身份')
+    ) {
+      auth.checkAuth?.().catch(() => {})
+    }
   } finally {
     submitting.value = false
   }
@@ -255,7 +275,14 @@ async function handleSubmit() {
           <div class="status-header">
             <BeatmakerBadge size="lg" variant="solid" />
             <h1>你已是认证 Beatmaker</h1>
-            <p class="status-desc">可前往个人主页完善资料，并开始上传原创伴奏</p>
+            <p class="status-desc">一个账号只能绑定一个 Beatmaker 身份。可前往个人主页完善资料，并开始上传原创伴奏</p>
+          </div>
+          <div class="binding-tip">
+            <div class="binding-label">账号绑定</div>
+            <div class="binding-value">
+              <span class="binding-user">@{{ auth.user?.username ?? '-' }}</span>
+              <span class="binding-chip">1:1 已绑定</span>
+            </div>
           </div>
           <div class="status-actions">
             <button class="btn btn-primary" @click="router.push('/upload')">
@@ -325,7 +352,7 @@ async function handleSubmit() {
         <form v-else class="apply-form" @submit.prevent="handleSubmit">
           <div class="form-header">
             <h1>填写认证申请</h1>
-            <p class="form-subtitle">所有信息将用于审核，认证通过后可在个人主页查看</p>
+            <p class="form-subtitle">所有信息将用于审核，认证通过后可在个人主页查看。<strong>一个账号只能认证一个 Beatmaker 身份</strong></p>
           </div>
 
           <div v-if="errorMsg" class="alert alert-error">
@@ -351,13 +378,13 @@ async function handleSubmit() {
               @dragover="onAudioDragOver"
               @dragleave="onAudioDragLeave"
               @drop="onAudioDrop"
-              @click="$refs.audioInput?.click()"
+              @click="audioInputRef?.click()"
             >
               <div class="upload-icon">🎵</div>
               <p class="upload-title">拖拽音频文件到此处，或 <span class="upload-link">点击选择</span></p>
               <p class="upload-hint">支持 MP3 / WAV / AAC / M4A / FLAC / OGG，最大 20MB</p>
               <input
-                ref="audioInput"
+                ref="audioInputRef"
                 type="file"
                 accept=".mp3,.wav,.aac,.m4a,.flac,.ogg,audio/*"
                 class="sr-only"
@@ -751,6 +778,52 @@ async function handleSubmit() {
   display: flex;
   gap: 12px;
   justify-content: center;
+}
+
+/* 1:1 绑定提示 */
+.binding-tip {
+  margin: 12px auto 0;
+  max-width: 420px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+.binding-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
+}
+.binding-value {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.binding-user {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.binding-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #047857;
+  background: rgba(16, 185, 129, 0.18);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+@media (max-width: 640px) {
+  .binding-tip {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
 }
 
 /* Review info */

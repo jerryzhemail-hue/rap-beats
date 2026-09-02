@@ -51,6 +51,26 @@ export async function initDatabase(
     await db.execute('CREATE INDEX idx_beats_creator_role ON beats(creator_role)');
   } catch (_) { /* ignore if column exists or index exists */ }
 
+  // beats.play_count 字段：用于"人气 Rapper" 模块的真实人气计算（播放事件计数，由 POST /api/beats/:id/play-events 增量）
+  try {
+    await db.execute('ALTER TABLE beats ADD COLUMN play_count INT NOT NULL DEFAULT 0 AFTER download_count');
+  } catch (_) { /* ignore if column exists */ }
+  // 一次性回填历史 play_count（把已有的 play_events 累计到 beats.play_count 上）
+  try {
+    await db.execute(`
+      UPDATE beats b
+      LEFT JOIN (
+        SELECT beat_id, COUNT(*) AS cnt
+        FROM play_events
+        GROUP BY beat_id
+      ) pe ON pe.beat_id = b.id
+      SET b.play_count = COALESCE(pe.cnt, 0)
+      WHERE b.play_count = 0
+    `);
+  } catch (err) {
+    console.warn('[rapbeats] 回填 beats.play_count 失败(可忽略):', (err as Error).message);
+  }
+
   // users 表（必须在 beats 表之前，因为 beats 有 FK 依赖 users）
   await db.execute(`
     CREATE TABLE IF NOT EXISTS users (
@@ -156,13 +176,113 @@ export async function initDatabase(
       portfolio_url VARCHAR(500) NULL,
       sample_audio_url VARCHAR(500) NULL,
       certified_at DATETIME NOT NULL,
+      id_card_hash CHAR(64) NULL COMMENT '身份证号哈希（SHA-256+pepper），用于一个证件仅绑定一个账号',
       total_beats INT NOT NULL DEFAULT 0,
       total_likes INT NOT NULL DEFAULT 0,
       total_downloads INT NOT NULL DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_bm_profiles_id_card_hash (id_card_hash)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  // P1-B 加固（1:1 绑定）：
+  // ① beatmaker_applications 增加 id_card_hash 列 + UNIQUE（仅 approved 状态参与唯一）
+  //    避免一个身份证号在多个账号下分别申请通过
+  try {
+    const appHashCol = await db.queryOne<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'beatmaker_applications'
+          AND COLUMN_NAME = 'id_card_hash'`
+    );
+    if (!appHashCol || appHashCol.c === 0) {
+      await db.execute(
+        'ALTER TABLE beatmaker_applications ADD COLUMN id_card_hash CHAR(64) NULL COMMENT \'身份证号哈希，用于防一证多号认证\''
+      );
+    }
+    const appApprovedUniqCol = await db.queryOne<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'beatmaker_applications'
+          AND COLUMN_NAME = 'approved_id_card_unique'`
+    );
+    if (!appApprovedUniqCol || appApprovedUniqCol.c === 0) {
+      await db.execute(
+        'ALTER TABLE beatmaker_applications ' +
+        "ADD COLUMN approved_id_card_unique CHAR(64) AS (IF(status = 'approved', id_card_hash, NULL)) STORED"
+      );
+    }
+    const appApprovedUniqIdx = await db.queryOne<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'beatmaker_applications'
+          AND INDEX_NAME = 'uk_bm_applications_approved_id_card'`
+    );
+    if (!appApprovedUniqIdx || appApprovedUniqIdx.c === 0) {
+      // 先清可能重复的旧尾巴：同一 id_card_hash 存在多条 approved 时，保留 reviewed_at 最新一条
+      await db.execute(`
+        DELETE t FROM beatmaker_applications t
+        INNER JOIN beatmaker_applications k
+           ON k.id_card_hash = t.id_card_hash
+          AND k.status = t.status
+          AND k.id < t.id
+        WHERE t.status = 'approved' AND k.status = 'approved' AND t.id_card_hash IS NOT NULL
+      `);
+      await db.execute(
+        'ALTER TABLE beatmaker_applications ' +
+        'ADD UNIQUE KEY uk_bm_applications_approved_id_card (approved_id_card_unique)'
+      );
+    }
+  } catch (err) {
+    console.warn('[init] beatmaker 1:1 绑定加固失败（id_card_hash UNIQUE），请手动检查：', (err as any)?.message || err);
+  }
+
+  // ② beatmaker_profiles 补齐 id_card_hash 列 & 唯一索引（兼容历史 CREATE TABLE 未包含该列的库）
+  try {
+    const pCol = await db.queryOne<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'beatmaker_profiles'
+          AND COLUMN_NAME = 'id_card_hash'`
+    );
+    if (!pCol || pCol.c === 0) {
+      await db.execute(
+        'ALTER TABLE beatmaker_profiles ADD COLUMN id_card_hash CHAR(64) NULL COMMENT \'身份证号哈希，用于一个证件仅绑定一个账号\''
+      );
+    }
+    const pIdx = await db.queryOne<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'beatmaker_profiles'
+          AND INDEX_NAME = 'uk_bm_profiles_id_card_hash'`
+    );
+    if (!pIdx || pIdx.c === 0) {
+      // 去重：保留 user_id 最小的记录（最新 certified_at 优先；实际冲突极少，若有按 id 取最小）
+      await db.execute(`
+        DELETE t FROM beatmaker_profiles t
+        INNER JOIN beatmaker_profiles k
+           ON k.id_card_hash = t.id_card_hash
+          AND k.user_id < t.user_id
+        WHERE t.id_card_hash IS NOT NULL AND k.id_card_hash IS NOT NULL
+      `);
+      await db.execute(
+        'ALTER TABLE beatmaker_profiles ADD UNIQUE KEY uk_bm_profiles_id_card_hash (id_card_hash)'
+      );
+    }
+  } catch (err) {
+    console.warn('[init] beatmaker_profiles id_card_hash 加固失败，请手动检查：', (err as any)?.message || err);
+  }
+
+  // ③ 清理孤立的 beatmaker_profiles：users.is_beatmaker 为 0/NULL 时不应该还挂着 profile
+  //    避免列表页 INNER JOIN 出现用户名 NULL 的僵尸卡片。
+  try {
+    await db.execute(`
+      DELETE bp FROM beatmaker_profiles bp
+      LEFT JOIN users u ON u.id = bp.user_id
+      WHERE u.id IS NULL OR u.is_beatmaker IS NULL OR u.is_beatmaker = 0
+    `);
+  } catch (err) {
+    console.warn('[init] beatmaker 孤立 profile 清理失败：', (err as any)?.message || err);
+  }
+
+  // ④ 用户身份证一致性反向回填（仅补 profile.id_card_hash，不加新的 users 列）
+  //    — 权威绑定以 users.is_beatmaker 1:1 beatmaker_profiles.user_id 作为主链。
 
   // beats 表
   await db.execute(`
@@ -179,9 +299,11 @@ export async function initDatabase(
       file_path TEXT NOT NULL,
       cover_image TEXT NULL,
       download_count INT DEFAULT 0,
+      play_count INT NOT NULL DEFAULT 0,
       is_free TINYINT DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       uploaded_by INT NULL,
+      creator_role ENUM('admin','beatmaker','rappers_only') NOT NULL DEFAULT 'admin',
       is_vip_only TINYINT DEFAULT 0,
       INDEX idx_beats_created_at (created_at),
       INDEX idx_beats_uploaded_by (uploaded_by),
@@ -716,6 +838,21 @@ export async function initDatabase(
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       updated_by INT NULL,
       INDEX idx_hpmc_sort (sort_order)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // ─── 会员权益弹框访问记录表 ────────────────────────────────
+  // 同一 IP 在 cooldown 窗口(默认 24h)内只弹一次弹框,避免每次刷新都打扰用户。
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS membership_banner_views (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      ip_address VARCHAR(45) NOT NULL,
+      first_seen_at DATETIME NOT NULL,
+      last_seen_at DATETIME NOT NULL,
+      view_count INT NOT NULL DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_mbv_ip (ip_address),
+      INDEX idx_mbv_last_seen (last_seen_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 

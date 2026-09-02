@@ -1,10 +1,11 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
-import { requireAuth, AuthRequest } from '../middleware/auth.js';
+import { requireAuth, optionalAuth, AuthRequest } from '../middleware/auth.js';
 import { requireBeatmaker } from '../middleware/beatmaker.js';
-import { getDatabaseClient } from '../database/client.js';
-import { encryptIdCard, decryptIdCard, maskIdCard } from '../utils/idcard-cipher.js';
+import { getDatabaseClient, getForumDatabaseClient } from '../database/client.js';
+import { encryptIdCard, decryptIdCard, maskIdCard, hashIdCard } from '../utils/idcard-cipher.js';
 import { saveBuffer } from '../services/storage.js';
+import { serializeBeatAssets } from '../utils/assets.js';
 
 const router = Router();
 
@@ -34,13 +35,20 @@ router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: '请填写个人简介（至少 20 个字符）' });
   }
 
-  // 检查用户当前是否已是 Beatmaker
+  // 身份证号哈希（用于 1:1 绑定校验）
+  const idCardPlain = id_card_no.trim();
+  const idCardHash = hashIdCard(idCardPlain);
+
+  // ─── 绑定规则 1：账号级 1:1（同一账号只能有 1 个 Beatmaker 身份）────────
   const u = await database.queryOne<{ is_beatmaker: number }>(
     'SELECT is_beatmaker FROM users WHERE id = ?',
     [userId]
   );
   if (u?.is_beatmaker === 1) {
-    return res.status(409).json({ error: '你已经是认证 Beatmaker，无需重复申请' });
+    return res.status(409).json({
+      error: '你已经是认证 Beatmaker，一个账号只能拥有一个认证身份，无需重复申请',
+      code: 'ACCOUNT_ALREADY_BEATMAKER'
+    });
   }
 
   // 检查是否已有 pending 申请
@@ -49,7 +57,35 @@ router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
     [userId]
   );
   if (pending) {
-    return res.status(409).json({ error: '你已有待审核的申请，请耐心等待', application_id: pending.id });
+    return res.status(409).json({
+      error: '你已有待审核的申请，请耐心等待',
+      code: 'APPLICATION_PENDING',
+      application_id: pending.id
+    });
+  }
+
+  // ─── 绑定规则 2：身份证级 1:1（同一身份证号只能绑定一个账号） ────────
+  // 已在 beatmaker_profiles 存在 → 该身份证号已被其他账号占用
+  const profileBinding = await database.queryOne<{ user_id: number }>(
+    'SELECT user_id FROM beatmaker_profiles WHERE id_card_hash = ? LIMIT 1',
+    [idCardHash]
+  );
+  if (profileBinding && profileBinding.user_id !== userId) {
+    return res.status(409).json({
+      error: '该身份证号已绑定到其他 Beatmaker 账号，一个身份证号只能认证一个账号',
+      code: 'IDCARD_ALREADY_BOUND'
+    });
+  }
+  // 已在 applications 存在一条 approved（同身份证号但其他账号申请通过了）
+  const approvedOther = await database.queryOne<{ user_id: number }>(
+    "SELECT user_id FROM beatmaker_applications WHERE status = 'approved' AND id_card_hash = ? LIMIT 1",
+    [idCardHash]
+  );
+  if (approvedOther && approvedOther.user_id !== userId) {
+    return res.status(409).json({
+      error: '该身份证号已通过另一个账号的 Beatmaker 认证，一个身份证号只能认证一个账号',
+      code: 'IDCARD_ALREADY_APPROVED'
+    });
   }
 
   // 被拒后 3 天冷却
@@ -70,13 +106,13 @@ router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
     }
   }
 
-  const encrypted = encryptIdCard(id_card_no.trim());
+  const encrypted = encryptIdCard(idCardPlain);
   try {
     const result = await database.execute(
       `INSERT INTO beatmaker_applications
-         (user_id, real_name, id_card_no_enc, portfolio_url, sample_work_url, sample_audio_url, bio, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
-      [userId, real_name.trim(), encrypted, portfolio_url.trim(), sample_work_url.trim(), sample_audio_url?.trim() || null, bio.trim()]
+         (user_id, real_name, id_card_no_enc, id_card_hash, portfolio_url, sample_work_url, sample_audio_url, bio, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [userId, real_name.trim(), encrypted, idCardHash, portfolio_url.trim(), sample_work_url.trim(), sample_audio_url?.trim() || null, bio.trim()]
     );
 
     // 通知管理员：有新的 Beatmaker 申请
@@ -88,7 +124,7 @@ router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
     createAdminNotification({
       type: 'beatmaker_application',
       title: 'Beatmaker 新认证申请',
-      content: `用户 ${userInfo?.username || userId} 提交了 Beatmaker 认证申请`,
+      content: `用户 ${userInfo?.username || userId} 提交了 Beatmaker 认证申请（账号与身份证一对一绑定校验已通过）`,
       data: { applicationId: result.insertId, userId, realName: real_name.trim() }
     }).catch(() => {});
 
@@ -97,12 +133,21 @@ router.post('/apply', requireAuth, async (req: AuthRequest, res) => {
     // pending_user_unique 生成列 + UNIQUE 会拦截同一用户第 2 条 pending 申请，
     // 把底层冲突翻译成与应用层分支一致的 409，避免竞态下出现 500。
     if (error?.code === 'ER_DUP_ENTRY' || Number(error?.errno) === 1062) {
+      // key 名称 hint：若含 approved_id_card 则为身份证重复绑定（并发下其他账号同时 approve）
+      const keyName = String(error?.sqlMessage || '');
+      if (keyName.includes('approved_id_card')) {
+        return res.status(409).json({
+          error: '该身份证号刚刚已被另一个账号完成认证，一个身份证号只能认证一个账号',
+          code: 'IDCARD_ALREADY_APPROVED'
+        });
+      }
       const existing = await database.queryOne<{ id: number }>(
         "SELECT id FROM beatmaker_applications WHERE user_id = ? AND status = 'pending' LIMIT 1",
         [userId]
       );
       return res.status(409).json({
         error: '你已有待审核的申请，请耐心等待',
+        code: 'APPLICATION_PENDING',
         application_id: existing?.id ?? undefined
       });
     }
@@ -222,8 +267,8 @@ router.get('/application/me', requireAuth, async (req: AuthRequest, res) => {
 });
 
 // ─── GET /api/beatmaker/profile/:userId ───────────────────────
-// 公开的 Beatmaker 档案
-router.get('/profile/:userId', async (req: Request, res) => {
+// 公开的 Beatmaker 档案（已登录时附带关注/粉丝统计）
+router.get('/profile/:userId', optionalAuth, async (req: AuthRequest, res) => {
   const database = getDatabaseClient();
   const userId = parseInt(req.params.userId as string, 10);
   if (!userId || isNaN(userId)) return res.status(400).json({ error: '无效的 userId' });
@@ -250,7 +295,104 @@ router.get('/profile/:userId', async (req: Request, res) => {
     [userId]
   );
   if (!row) return res.status(404).json({ error: '该用户未通过 Beatmaker 认证' });
-  return res.json({ profile: row });
+
+  // 查询关注/粉丝数 + 已登录用户是否关注
+  // 注意：关注关系表 forum_follows 存在于 forum schema，需使用 getForumDatabaseClient
+  let followerCount = 0, followingCount = 0, isFollowing = false, isFollowedBy = false;
+  try {
+    const socialDb = getForumDatabaseClient();
+    const fc = await socialDb.queryOne<{ follower: number; following: number }>(
+      `SELECT
+         (SELECT COUNT(*) FROM forum_follows WHERE following_id = ?) AS follower,
+         (SELECT COUNT(*) FROM forum_follows WHERE follower_id = ?) AS following`,
+      [userId, userId]
+    );
+    if (fc) { followerCount = fc.follower; followingCount = fc.following; }
+    if (req.user && req.user.id !== userId) {
+      const st = await socialDb.queryOne<{ is_following: number; is_followed_by: number }>(
+        `SELECT
+           EXISTS(SELECT 1 FROM forum_follows WHERE follower_id = ? AND following_id = ?) AS is_following,
+           EXISTS(SELECT 1 FROM forum_follows WHERE follower_id = ? AND following_id = ?) AS is_followed_by`,
+        [req.user.id, userId, userId, req.user.id]
+      );
+      if (st) { isFollowing = !!st.is_following; isFollowedBy = !!st.is_followed_by; }
+    }
+  } catch { /* 社交数据缺失不影响基础档案 */ }
+
+  return res.json({
+    profile: {
+      ...row,
+      follower_count: followerCount,
+      following_count: followingCount,
+      is_following: isFollowing,
+      is_followed_by: isFollowedBy,
+      is_self: req.user?.id === userId
+    }
+  });
+});
+
+// ─── GET /api/beatmaker/profile/:userId/beats ─────────────────
+// 某个 Beatmaker 的原创作品集列表
+router.get('/profile/:userId/beats', optionalAuth, async (req: AuthRequest, res) => {
+  const database = getDatabaseClient();
+  const userId = parseInt(req.params.userId as string, 10);
+  if (!userId || isNaN(userId)) return res.status(400).json({ error: '无效的 userId' });
+
+  // 先确认是 Beatmaker
+  const bm = await database.queryOne<{ user_id: number }>(
+    'SELECT user_id FROM beatmaker_profiles WHERE user_id = ?',
+    [userId]
+  );
+  if (!bm) return res.status(404).json({ error: '该用户未通过 Beatmaker 认证' });
+
+  const page = Math.max(1, parseInt((req.query.page as string) || '1'));
+  const limit = Math.max(1, Math.min(50, parseInt((req.query.limit as string) || '12')));
+  const offset = (page - 1) * limit;
+
+  const total = (await database.queryOne<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM beats WHERE uploaded_by = ?',
+    [userId]
+  ))?.count ?? 0;
+
+  const beatIds: number[] = [];
+  const beats = await database.queryMany<any>(
+    'SELECT * FROM beats WHERE uploaded_by = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?',
+    [userId, limit, offset]
+  );
+  beats.forEach((b: any) => beatIds.push(b.id));
+
+  // 批量聚合 favorite_count
+  const favCountMap = new Map<number, number>();
+  if (beatIds.length > 0) {
+    const placeholders = beatIds.map(() => '?').join(',');
+    const favCounts = await database.queryMany<{ beat_id: number; cnt: number }>(
+      `SELECT beat_id, COUNT(*) AS cnt FROM favorites WHERE beat_id IN (${placeholders}) GROUP BY beat_id`,
+      beatIds
+    );
+    favCounts.forEach((r) => favCountMap.set(r.beat_id, r.cnt));
+  }
+
+  // 登录用户批量查询收藏状态
+  let favoriteIds: Set<number> = new Set();
+  if (req.user && beatIds.length > 0) {
+    const placeholders = beatIds.map(() => '?').join(',');
+    const favs = await database.queryMany<{ beat_id: number }>(
+      `SELECT beat_id FROM favorites WHERE user_id = ? AND beat_id IN (${placeholders})`,
+      [req.user.id, ...beatIds]
+    );
+    favoriteIds = new Set(favs.map((f) => f.beat_id));
+  }
+
+  return res.json({
+    beats: beats.map((b: any) => serializeBeatAssets({
+      ...b,
+      favorite_count: favCountMap.get(b.id) ?? 0,
+      is_favorited: favoriteIds.has(b.id)
+    })),
+    total,
+    page,
+    totalPages: Math.ceil(total / limit)
+  });
 });
 
 // ─── GET /api/beatmaker/list ─────────────────────────────────

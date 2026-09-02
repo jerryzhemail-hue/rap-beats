@@ -94,6 +94,54 @@ function handleAuthClose() {
     </div>
     <template v-else>
       <div class="page-body">
+        <!-- 已认证 Beatmaker：创作面板 -->
+        <div v-if="isBeatmaker" class="certified-panel">
+          <div class="cp-main">
+            <div class="cp-status">
+              <BeatmakerBadge size="md" variant="solid" />
+              <span>你已通过原创制作人认证</span>
+            </div>
+            <h2 class="cp-title">开始上架你的原创伴奏</h2>
+            <p class="cp-desc">上传音频后系统会自动识别 BPM 与调性，填写作品信息即可发布上架。</p>
+            <div class="cp-actions">
+              <button class="cp-btn-primary" @click="router.push('/upload')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/>
+                  <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                上传原创音频
+              </button>
+              <button class="cp-btn-ghost" @click="router.push(`/beatmaker/profile/${authStore.user?.id}`)">
+                我的资料
+              </button>
+            </div>
+          </div>
+          <div class="cp-steps">
+            <div class="cp-step">
+              <span class="cp-step-num">1</span>
+              <div>
+                <strong>上传音频</strong>
+                <small>MP3 / WAV / FLAC 等格式</small>
+              </div>
+            </div>
+            <div class="cp-step">
+              <span class="cp-step-num">2</span>
+              <div>
+                <strong>自动识别</strong>
+                <small>BPM 与调性一键识别</small>
+              </div>
+            </div>
+            <div class="cp-step">
+              <span class="cp-step-num">3</span>
+              <div>
+                <strong>填写上架</strong>
+                <small>完善信息并发布作品</small>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- 已登录但未认证：引导卡片 -->
         <div v-if="isAuthenticated && !isBeatmaker" class="cert-guide">
         <div class="cg-hero">
@@ -222,6 +270,10 @@ function handleAuthClose() {
             <button class="banner-btn secondary" @click="handleAuthCancel">继续浏览</button>
           </div>
         </div>
+      </div>
+
+      <div class="bm-list-header">
+        <h2>原创音乐制作人</h2>
       </div>
 
       <div class="bm-grid" :class="{ 'blur-overlay': !isAuthenticated }">
@@ -364,9 +416,11 @@ function handleAuthClose() {
 
 <style scoped>
 .list-page {
-  max-width: 1100px;
+  width: 75%;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 32px 16px;
+  padding: 32px 24px;
+  box-sizing: border-box;
 }
 
 .page-header {
@@ -425,6 +479,125 @@ function handleAuthClose() {
 
 .page-body {
   position: relative;
+}
+
+.certified-panel {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 28px;
+  background: linear-gradient(135deg, var(--accent-light), var(--bg-card, #252540));
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+  margin-bottom: 24px;
+  box-shadow: 0 4px 20px var(--shadow);
+}
+
+.cp-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.cp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.cp-title {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.cp-desc {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary, #6b7280);
+}
+
+.cp-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cp-btn-primary,
+.cp-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 18px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.cp-btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: #fff;
+  box-shadow: 0 4px 12px var(--shadow);
+}
+
+.cp-btn-primary:hover {
+  transform: translateY(-1px);
+}
+
+.cp-btn-ghost {
+  background: transparent;
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border);
+}
+
+.cp-btn-ghost:hover {
+  background: var(--accent-light);
+}
+
+.cp-steps {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+}
+
+.cp-step {
+  display: flex;
+  gap: 10px;
+  min-width: 150px;
+}
+
+.cp-step-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.cp-step strong {
+  display: block;
+  font-size: 14px;
+}
+
+.cp-step small {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
 }
 
 /* 登录引导横幅 */
@@ -525,6 +698,21 @@ function handleAuthClose() {
 .banner-btn.secondary:hover {
   background: var(--accent-light);
   filter: brightness(1.1);
+}
+
+/* Beatmaker 列表标题 */
+.bm-list-header {
+  margin: 8px 0 20px;
+  display: flex;
+  align-items: center;
+}
+
+.bm-list-header h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: var(--text-primary);
 }
 
 /* Beatmaker 卡片网格 */
@@ -1107,6 +1295,17 @@ function handleAuthClose() {
 
 /* 响应式 */
 @media (max-width: 768px) {
+  .list-page {
+    width: 100%;
+    padding: 24px 16px;
+  }
+  .certified-panel {
+    flex-direction: column;
+  }
+  .cp-steps {
+    flex-direction: column;
+    gap: 14px;
+  }
   .cg-hero {
     grid-template-columns: 1fr;
   }
