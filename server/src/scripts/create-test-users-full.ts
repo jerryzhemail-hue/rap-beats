@@ -25,7 +25,7 @@ if (process.env.NODE_ENV === 'production') {
   console.error('   如确实需要在本地跑,请:NODE_ENV=development npm run create-test-users-full');
   process.exit(1);
 }
-if (process.env.DB_NAME === 'rap_beats' || process.env.FORUM_DB_NAME === 'rap_beats_forum') {
+if (process.env.DB_NAME === 'rap_beats') {
   console.error('❌ create-test-users-full 检测到线上库名,拒绝执行');
   console.error('   DB_NAME =', process.env.DB_NAME);
   console.error('   FORUM_DB_NAME =', process.env.FORUM_DB_NAME);
@@ -164,10 +164,10 @@ async function main() {
   for (const user of TEST_USERS) {
     const hash = bcrypt.hashSync(USER_PASSWORD, 10);
     await conn.execute(
-      `INSERT INTO users (username, email, password_hash, role, vip_level, vip_expire_at)
-       VALUES (?, ?, ?, 'user', ?, ?)
-       ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), vip_level = VALUES(vip_level), vip_expire_at = VALUES(vip_expire_at)`,
-      [user.username, user.email, hash, user.vip, user.vip === 'free' ? null : future]
+      `INSERT INTO users (username, email, password_hash, role, vip_level, vip_expire_at, is_vip)
+       VALUES (?, ?, ?, 'user', ?, ?, ?)
+       ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), vip_level = VALUES(vip_level), vip_expire_at = VALUES(vip_expire_at), is_vip = VALUES(is_vip)`,
+      [user.username, user.email, hash, user.vip, user.vip === 'free' ? null : future, user.vip === 'free' ? 0 : 1]
     );
 
     const [rows] = await conn.query<(RowDataPacket & { id: number })[]>(
@@ -178,6 +178,21 @@ async function main() {
     if (!userId) throw new Error(`用户 ${user.username} 插入后未查到 id`);
     userIds[user.username] = userId;
     console.log(`  ✓ ${user.username} (id=${userId}, vip=${user.vip})`);
+  }
+
+  // 同步 VIP 真相源 membership.vip_users（应用判定 VIP 的依据表）
+  const vipDays: Record<string, number> = { basic: 30, premium: 90, ultimate: 365 };
+  for (const user of TEST_USERS) {
+    if (user.vip === 'free') continue;
+    const uid = userIds[user.username];
+    const days = vipDays[user.vip] ?? 365;
+    const expire = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    await membershipConn.execute(
+      `INSERT INTO vip_users (user_id, vip_level, is_vip, vip_expire_at, source)
+       VALUES (?, ?, 1, ?, 'admin_grant')
+       ON DUPLICATE KEY UPDATE vip_level = VALUES(vip_level), is_vip = 1, vip_expire_at = VALUES(vip_expire_at), source = 'admin_grant'`,
+      [uid, user.vip, expire]
+    );
   }
 
   // ========================================
