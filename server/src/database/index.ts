@@ -683,7 +683,6 @@ export async function initDatabase(
       INDEX idx_banners_is_active (is_active)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
-
   // ─── 首页尾部内容配置 + FAQ ────────────────────────────────────────────────
   await db.execute(`
     CREATE TABLE IF NOT EXISTS home_footer_config (

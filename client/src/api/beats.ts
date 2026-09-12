@@ -21,7 +21,14 @@ export interface HomePublicResponse {
     total_downloads?: number
     popularity?: number
   }>
-  tags: Array<{ tag: string; count: number }>
+  tags: Array<{
+    id: number
+    name: string
+    slug: string
+    category: string
+    color?: string | null
+    usage_count: number
+  }>
   forumPosts: Array<{
     id: number
     title: string

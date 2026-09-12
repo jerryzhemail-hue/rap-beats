@@ -10,6 +10,37 @@ import { detectBpmFromBuffer } from '../services/bpmDetector.js';
 import type { DatabaseClient } from '../database/client.js';
 import { syncBeatmakerStat } from './beats.js';
 
+/**
+ * 同步 beat 与标签的关联记录 (降级为 no-op)
+ *
+ * 行为变更（删除热门标签功能后）：
+ * - 原实现基于 `beat_tags` / `beat_tag_usage` 两张表，这两张表已随热门标签功能下线被删除。
+ * - 当前标签数据只存在于 `beats.tags` JSON 字段中，无需额外同步。
+ * - 函数签名保留是为了让 beats.ts 上传/编辑的调用点不需要改动。
+ * - 解析 tags 字符串（JSON 数组 / 逗号分隔），可观察当前输入是否有效,失败时打印警告。
+ * - 不再写数据库,所有 DB 写入逻辑已移除。
+ */
+export async function syncBeatTagUsage(
+  _database: DatabaseClient,
+  _beatId: number,
+  tagsJson: string | null | undefined,
+  _creatorRole: 'admin' | 'beatmaker' | 'rappers_only'
+): Promise<void> {
+  if (!tagsJson) return;
+  // 仅做一次解析合法性检查,不再写库
+  const trimmed = tagsJson.trim();
+  try {
+    if (trimmed.startsWith('[')) {
+      JSON.parse(trimmed);
+    } else {
+      trimmed.split(',');
+    }
+  } catch (err) {
+    console.warn('[syncBeatTagUsage] tags JSON 解析失败 (已忽略):', { tagsJson, err });
+  }
+}
+
+
 // 生成默认封面（SVG 格式，纯色背景 + 标题首字母）
 function generateDefaultCover(title: string): string {
   const colors = [
@@ -203,6 +234,9 @@ async function createBeatRecord(
     if (uploadedBy) {
       syncBeatmakerStat(uploadedBy, 'total_beats', 1).catch(() => {});
     }
+
+    // 同步标签关联
+    await syncBeatTagUsage(database, result.insertId, payload.tags, creatorRole);
   }
 
   return result;
@@ -435,6 +469,9 @@ router.post('/beats/upload-direct', requireUploader, async (req: AuthRequest, re
 
       // 同步 beatmaker_profiles.total_beats
       syncBeatmakerStat(req.user!.id, 'total_beats', 1).catch(() => {});
+
+      // 同步标签关联
+      await syncBeatTagUsage(database, result.insertId, tags, creatorRole2);
 
       const beat = await database.queryOne<Record<string, unknown>>('SELECT * FROM beats WHERE id = ?', [result.insertId]);
       if (beat) {

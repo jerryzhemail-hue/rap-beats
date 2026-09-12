@@ -102,8 +102,8 @@ start_backend() {
     info "安装后端依赖..."
     (cd "$SERVER_DIR" && npm install)
   fi
-  info "启动后端（nohup，日志 ${SERVER_LOG}）..."
-  ( cd "$SERVER_DIR" && nohup node --import tsx/esm src/index.ts > "$SERVER_LOG" 2>&1 & echo $! > "$SERVER_PID" )
+  info "启动后端（tsx watch 热重载，日志 ${SERVER_LOG}）..."
+  ( cd "$SERVER_DIR" && nohup ./node_modules/.bin/tsx watch src/index.ts > "$SERVER_LOG" 2>&1 & echo $! > "$SERVER_PID" )
   for i in $(seq 1 40); do
     if backend_ready; then log "后端就绪 http://localhost:3000"; return 0; fi
     if [ -f "$SERVER_PID" ] && ! kill -0 "$(cat "$SERVER_PID" 2>/dev/null)" 2>/dev/null; then
@@ -112,6 +112,21 @@ start_backend() {
     sleep 1
   done
   warn "后端 40 秒内未就绪，查看日志: tail -f $SERVER_LOG"
+}
+
+# 手动触发一次热门标签扫描(避免等待 6 小时定时任务)
+warmup_tag_algorithm() {
+  if ! backend_ready; then return 0; fi
+  # 后端在 initDatabase 之后会异步跑一次首次扫描,这里不重复触发
+  # 但可以等几秒看看有没有命中日志
+  sleep 3
+  if grep -q "tag-algorithm" "$SERVER_LOG" 2>/dev/null; then
+    local last_line
+    last_line="$(grep "tag-algorithm" "$SERVER_LOG" | tail -1)"
+    info "热门标签算法: $last_line"
+  else
+    info "热门标签算法: 后端启动后会在首次就绪时自动扫描"
+  fi
 }
 
 start_frontend() {
@@ -174,6 +189,7 @@ start_all() {
   ensure_mysql
   start_backend
   start_frontend
+  warmup_tag_algorithm
   show_status
 }
 

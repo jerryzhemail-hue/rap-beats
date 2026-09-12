@@ -65,6 +65,7 @@ const coverUpload = multer({
 type BeatRecord = Beat & {
   uploaded_by?: number | null;
   is_vip_only?: number;
+  creator_role?: 'admin' | 'beatmaker' | 'rappers_only';
   recent_downloads?: number;
   favorite_count?: number;
   recent_favorites?: number;
@@ -225,7 +226,7 @@ router.get('/beats', optionalAuth, async (req: AuthRequest, res: Response) => {
   const limit = Math.max(1, Math.min(100, parseInt(req.query.limit as string) || 12));
   const offset = (page - 1) * limit;
 
-  const { genre, bpm_min, bpm_max, key, search, is_free, sort, rapper, tag } = req.query as Record<string, string>;
+  const { genre, bpm_min, bpm_max, key, search, is_free, sort, rapper } = req.query as Record<string, string>;
   const popularSince = new Date();
   popularSince.setDate(popularSince.getDate() - 7);
   const popularSinceText = toDateTimeString(popularSince);
@@ -253,12 +254,7 @@ router.get('/beats', optionalAuth, async (req: AuthRequest, res: Response) => {
       params.push(rapper);
     }
   }
-  if (tag) {
-    // tags 是 JSON 数组，用 LIKE 模糊匹配
-    conditions.push("b.tags LIKE ?");
-    params.push(`%"${tag}"%`);
-  }
-  if (bpm_min) {
+if (bpm_min) {
     conditions.push('b.bpm >= ?');
     params.push(parseInt(bpm_min));
   }
@@ -944,60 +940,7 @@ router.get('/home/public', async (_req: Request, res: Response) => {
     LIMIT 8
   `);
 
-  // 热门标签（仅统计官方伴奏库，避免被 Beatmaker 作品污染官方标签）
-  const tagRows = await database.queryMany<{ tags: string | null }>(
-    `SELECT tags FROM beats WHERE creator_role = 'admin' AND tags IS NOT NULL AND tags != '' AND tags != '[]'`
-  );
-  const tagCount: Record<string, number> = {};
-  for (const row of tagRows) {
-    try {
-      const parsed = JSON.parse(row.tags || '[]') as string[];
-      for (const tag of parsed) {
-        const t = tag.trim();
-        if (t) tagCount[t] = (tagCount[t] || 0) + 1;
-      }
-    } catch {
-      // ignore parse errors
-    }
-  }
-  const topTags = Object.entries(tagCount)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 20)
-    .map(([tag, count]) => ({ tag, count }));
-
-  // 论坛最新帖子（先查 forum DB，再去主库取作者信息）
-  const forumDb = getForumDatabaseClient();
-  const forumPostRows = await forumDb.queryMany<any>(`
-    SELECT id, title, view_count, comment_count AS reply_count, like_count, created_at, user_id
-    FROM forum_posts
-    WHERE status = 'published'
-    ORDER BY created_at DESC
-    LIMIT 4
-  `);
-
-  // 用主库补充作者信息（复用上面的 database 句柄）
-  let forumPosts: Array<any> = [];
-  if (forumPostRows.length > 0) {
-    const userIds = [...new Set(forumPostRows.map((p: any) => p.user_id))];
-    const placeholders = userIds.map(() => '?').join(',');
-    const users = await database.queryMany<{ id: number; username: string; avatar_url: string | null }>(
-      `SELECT id, username, avatar_url FROM users WHERE id IN (${placeholders})`,
-      userIds
-    );
-    const userMap = new Map(users.map((u) => [u.id, u]));
-    forumPosts = forumPostRows.map((p: any) => ({
-      id: p.id,
-      title: p.title,
-      view_count: p.view_count,
-      reply_count: p.reply_count,
-      like_count: p.like_count,
-      created_at: p.created_at,
-      username: userMap.get(p.user_id)?.username || '匿名',
-      author_avatar: userMap.get(p.user_id)?.avatar_url || null,
-    }));
-  }
-
-  // 序列化封面图片（OSS 模式下生成签名 URL）
+    // 序列化封面图片（OSS 模式下生成签名 URL）
   const serializedLatest = latestBeats.map((b: any) => serializeBeatAssets(b));
   const serializedPopular = popularBeats.map((b: any) => serializeBeatAssets(b));
   const serializedFree = freeBeats.map((b: any) => serializeBeatAssets(b));
@@ -1007,7 +950,6 @@ router.get('/home/public', async (_req: Request, res: Response) => {
     popular: { beats: serializedPopular, total: serializedPopular.length },
     free: { beats: serializedFree, total: serializedFree.length },
     rappers,
-    tags: topTags,
     forumPosts,
   });
 });
@@ -1187,6 +1129,19 @@ router.put('/beats/:id', requireAuth, async (req: AuthRequest, res: Response) =>
 
   if (beat.cover_image && nextCoverImage !== beat.cover_image) {
     await deleteStoredAsset('cover', beat.cover_image);
+  }
+
+  // 标签关联（已降级为 no-op，仅做解析校验，详见 syncBeatTagUsage）
+  // 取最终入库的 tags:tags 是 COALESCE，要么是新值要么是旧值
+  const finalTagJson = tags === undefined ? beat.tags : tags;
+  if (tags !== undefined) {
+    const { syncBeatTagUsage } = await import('./upload.js');
+    await syncBeatTagUsage(
+      database,
+      parseInt(id as string),
+      finalTagJson,
+      beat.creator_role as 'admin' | 'beatmaker' | 'rappers_only'
+    );
   }
 
   // 更新关联 rapper 的权重(优先取 rapper 字段,否则取 producer 第一个名字)

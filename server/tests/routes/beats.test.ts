@@ -1,8 +1,8 @@
 /**
  * server/tests/routes/beats.test.ts
  * Beats 首页多模块接口测试
- * - GET /home/public  (rappers / tags / forumPosts)
- * - GET /beats?tag=  (标签筛选)
+ * - GET /home/public  (rappers / forumPosts)
+ * - GET /beats  (筛选)
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { buildApp } from '../../src/app.js';
@@ -27,10 +27,8 @@ describe('Beats 首页公开接口', () => {
     expect(res.body).toHaveProperty('popular');
     expect(res.body).toHaveProperty('free');
     expect(res.body).toHaveProperty('rappers');
-    expect(res.body).toHaveProperty('tags');
     expect(res.body).toHaveProperty('forumPosts');
     expect(Array.isArray(res.body.rappers)).toBe(true);
-    expect(Array.isArray(res.body.tags)).toBe(true);
     expect(Array.isArray(res.body.forumPosts)).toBe(true);
   });
 
@@ -46,16 +44,7 @@ describe('Beats 首页公开接口', () => {
     }
   });
 
-  it('TC-BEATS-003 P1 tags 包含 tag 和 count', async () => {
-    const res = await request(app).get('/api/home/public');
-    if (res.body.tags.length > 0) {
-      const t = res.body.tags[0];
-      expect(t).toHaveProperty('tag');
-      expect(t).toHaveProperty('count');
-    }
-  });
-
-  it('TC-BEATS-004 P1 forumPosts 包含必要字段', async () => {
+  it('TC-BEATS-003 P1 forumPosts 包含必要字段', async () => {
     const res = await request(app).get('/api/home/public');
     if (res.body.forumPosts.length > 0) {
       const p = res.body.forumPosts[0];
@@ -66,12 +55,12 @@ describe('Beats 首页公开接口', () => {
   });
 });
 
-describe('Beats 标签筛选 - GET /beats?tag=', () => {
+describe('Beats 列表筛选 - GET /beats', () => {
   let app: ReturnType<typeof createApp>;
 
   beforeAll(() => { app = createApp(); });
 
-  it('TC-BEATS-005 P0 无 tag 参数正常返回', async () => {
+  it('TC-BEATS-004 P0 无任何筛选参数正常返回', async () => {
     const res = await request(app).get('/api/beats');
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('beats');
@@ -79,13 +68,13 @@ describe('Beats 标签筛选 - GET /beats?tag=', () => {
     expect(res.body).toHaveProperty('page');
   });
 
-  it('TC-BEATS-006 P2 tag 参数不报错', async () => {
-    const res = await request(app).get('/api/beats?tag=Trap');
+  it('TC-BEATS-005 P2 免费筛选 is_free=1', async () => {
+    const res = await request(app).get('/api/beats?is_free=1');
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.beats)).toBe(true);
   });
 
-  it('TC-BEATS-007 P2 多参数组合筛选', async () => {
+  it('TC-BEATS-006 P2 多参数组合筛选', async () => {
     const res = await request(app).get('/api/beats?is_free=1&sort=newest&limit=3');
     expect(res.status).toBe(200);
     expect(res.body.beats.length).toBeLessThanOrEqual(3);

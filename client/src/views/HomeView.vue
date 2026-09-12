@@ -35,7 +35,6 @@ const popularBeats = ref<Beat[]>([])
 const freeBeats = ref<Beat[]>([])
 const banners = ref<Banner[]>([])
 const rappers = ref<HomePublicResponse['rappers']>([])
-const tags = ref<HomePublicResponse['tags']>([])
 const forumPosts = ref<HomePublicResponse['forumPosts']>([])
 const currentBannerIndex = ref(0)
 const isHeroHovered = ref(false)
@@ -103,8 +102,8 @@ onMounted(async () => {
     popularBeats.value = homeRes.value.popular.beats
     freeBeats.value = homeRes.value.free.beats
     rappers.value = homeRes.value.rappers || []
-    tags.value = homeRes.value.tags || []
     forumPosts.value = homeRes.value.forumPosts || []
+
   } else {
     console.error('Failed to load home data:', homeRes.reason)
   }
@@ -122,6 +121,8 @@ function formatPopularity(n: number): string {
   if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万'
   return String(n)
 }
+
+
 
 watch([banners, currentBannerIndex, isHeroHovered], () => {
   scheduleNextBanner()
@@ -145,9 +146,7 @@ function onRapperClick(rapperId: number) {
   router.push(`/rapper/${rapperId}`)
 }
 
-function onTagClick(tag: string) {
-  router.push({ path: '/beats', query: { tag } })
-}
+
 
 function onForumPostClick(postId: number) {
   router.push(`/forum/post/${postId}`)
@@ -263,29 +262,6 @@ function onForumPostClick(postId: number) {
       </div>
     </section>
 
-    <!-- 热门标签 -->
-    <section v-if="tags.length > 0" class="section">
-      <div class="section-header">
-        <h2 class="section-title">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-            <line x1="7" y1="7" x2="7.01" y2="7"/>
-          </svg>
-          热门标签
-        </h2>
-      </div>
-      <div class="tag-cloud">
-        <button
-          v-for="{ tag, count } in tags"
-          :key="tag"
-          class="tag-chip"
-          @click="onTagClick(tag)"
-        >
-          {{ tag }}
-          <span class="tag-count">{{ count }}</span>
-        </button>
-      </div>
-    </section>
 
     <!-- 人气 Rapper -->
     <section v-if="rappers.length > 0" class="section">
@@ -624,42 +600,6 @@ function onForumPostClick(postId: number) {
   transform: scale(1.04);
 }
 
-/* Tag cloud */
-.tag-cloud {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.tag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.tag-chip:hover {
-  border-color: var(--accent);
-  background: var(--accent-light);
-  color: var(--accent);
-}
-
-.tag-count {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--accent);
-  background: rgba(124, 58, 237, 0.15);
-  padding: 1px 6px;
-  border-radius: 999px;
-}
 
 /* Rapper grid */
 .rapper-row {

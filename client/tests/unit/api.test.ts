@@ -123,25 +123,23 @@ describe('beats API', () => {
       popular: { beats: [], total: 0, page: 1 },
       free: { beats: [], total: 0, page: 1 },
       rappers: [],
-      tags: [],
       forumPosts: [],
     })
     const { fetchHomePublicData } = await import('@/api/beats')
     const res = await fetchHomePublicData()
     expect(res).toHaveProperty('rappers')
-    expect(res).toHaveProperty('tags')
     expect(res).toHaveProperty('forumPosts')
   })
 
-  it('TC-CLIENT-BEATS-002 fetchBeats 携带 tag 参数', async () => {
+  it('TC-CLIENT-BEATS-002 fetchBeats 携带 is_free 参数', async () => {
     mockFetchOnce({ beats: [], total: 0, page: 1 })
     const { fetchBeats } = await import('@/api/beats')
-    await fetchBeats({ tag: 'Trap', limit: 5 })
+    await fetchBeats({ is_free: true, limit: 5 })
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/beats'),
       expect.anything()
     )
     const url = fetchMock.mock.calls[0][0] as string
-    expect(url).toContain('tag=Trap')
+    expect(url).toContain('is_free=true')
   })
 })

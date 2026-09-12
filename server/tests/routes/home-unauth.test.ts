@@ -84,14 +84,13 @@ describe('首页公开接口 - 未登录场景', () => {
     expect(Array.isArray(arr)).toBe(true);
   });
 
-  it('TC-UN-006 GET /api/home/public 未登录 → 200, 含 latest/popular/free/rappers/tags/forumPosts', async () => {
+  it('TC-UN-006 GET /api/home/public 未登录 → 200, 含 latest/popular/free/rappers/forumPosts', async () => {
     const res = await request(app).get('/api/home/public');
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('latest');
     expect(res.body).toHaveProperty('popular');
     expect(res.body).toHaveProperty('free');
     expect(res.body).toHaveProperty('rappers');
-    expect(res.body).toHaveProperty('tags');
     expect(res.body).toHaveProperty('forumPosts');
   });
 
