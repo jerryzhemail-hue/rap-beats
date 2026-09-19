@@ -25,14 +25,9 @@ const COOLDOWN_MS = 24 * 60 * 60 * 1000;
  * 与 server/src/routes/preview.ts 中的 getClientIp 保持一致的提取逻辑。
  */
 function getClientIp(req: Request): string {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string') {
-    return forwarded.split(',')[0].trim();
-  }
-  if (Array.isArray(forwarded)) {
-    return String(forwarded[0]).split(',')[0].trim();
-  }
-  return req.socket?.remoteAddress || 'unknown';
+  // 用 req.ip 而非手动解析 X-Forwarded-For：交由 Express trust proxy
+  // （默认 loopback）处理，避免直连时被伪造 X-Forwarded-For 绕过限流。
+  return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
 /**

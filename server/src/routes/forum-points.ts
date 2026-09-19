@@ -373,12 +373,15 @@ router.get('/forum/lottery/status', optionalAuth, async (req: AuthRequest, res) 
 
 // POST /api/forum/lottery — 抽奖
 router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthRequest, res) => {
+  // 跨库（积分在 membership 库、抽奖记录在 forum 库、VIP 在主库）无法用单个事务，
+  // 用补偿机制：扣积分后若后续步骤失败，退回入场积分，避免「扣了分但没奖品」。
+  let costDeducted = false;
+  const lotteryCost = 5;
   try {
     const db = getForumDatabaseClient();
     const mainDb = getDatabaseClient();
 
     // 先扣除抽奖消耗的积分
-    const lotteryCost = 5;
     const userPoints = await getTotalPoints(req.user!.id);
     if (userPoints < lotteryCost) {
       return res.status(400).json({ error: '积分不足，需要 5 积分才能抽奖' });
@@ -403,6 +406,7 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
       reason: 'lottery_cost',
       description: `抽奖消耗 ${lotteryCost} 积分`,
     });
+    costDeducted = true;
 
     // 根据权重随机抽取奖品
     const totalWeight = LOTTERY_PRIZES.reduce((sum, p) => sum + p.weight, 0);
@@ -488,6 +492,15 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
       used_today: usedToday + 1,
     });
   } catch (err: any) {
+    if (costDeducted) {
+      // 抽奖后续步骤失败，退回入场积分，保证用户不损失
+      await changePoints({
+        userId: req.user!.id,
+        amount: lotteryCost,
+        reason: 'deduction',
+        description: '抽奖失败，退回入场积分',
+      }).catch(() => {});
+    }
     res.status(500).json({ error: err.message });
   }
 });
