@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireAuth, AuthRequest } from '../middleware/auth.js';
+import { requireAuth, optionalAuth, AuthRequest } from '../middleware/auth.js';
 import { getDatabaseClient, getForumDatabaseClient } from '../database/client.js';
 
 const router = Router();
@@ -10,7 +10,7 @@ const router = Router();
 //   - 返回每个用户带 nickname / is_beatmaker / is_followed_by_me（当前 viewer 视角）
 //   - 未登录时 is_followed_by_me 全部 false
 //   - 用于个人主页的关注/粉丝 Tab + 公开页 /u/:id
-router.get('/user/social/list', requireAuth, async (req: AuthRequest, res) => {
+router.get('/user/social/list', optionalAuth, async (req: AuthRequest, res) => {
   const forumDb = getForumDatabaseClient();
   const mainDb = getDatabaseClient();
 

@@ -3,20 +3,21 @@
  *
  * /api/user/profile/full + /api/user/social/list + /api/users/search 三个新接口测试
  *
- * 用 testadmin 做 viewer，因为前面 seed 阶段就创建了：
- *   - testadmin (id=432, role=admin, ultimate VIP)
- *   - social_test_b (id=466, nickname=节奏大师)
- *   - social_test_c (id=467, nickname=嘻哈狂人)
+ * 自包含：beforeAll 动态创建 testadmin / social_test_b / social_test_c，不依赖历史 seed。
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { buildApp } from '../../src/app.js';
 import userRouter from '../../src/routes/user.js';
+import userSocialRouter from '../../src/routes/user-social.js';
+import userSearchRouter from '../../src/routes/user-search.js';
 
 function createApp() {
   const app = buildApp();
   app.use('/api', userRouter);
+  app.use('/api', userSocialRouter);
+  app.use('/api', userSearchRouter);
   return app;
 }
 
@@ -43,28 +44,47 @@ async function resolveTestIds(database: any) {
 let app: ReturnType<typeof createApp>;
 let tokenAdmin: string;
 let tokenUserB: string;
+let ADMIN_ID: number;
 let TEST_IDS: { bId: number; cId: number; bUsername: string; cUsername: string };
 
 beforeAll(async () => {
   app = createApp();
-  // testadmin id=432 (历史 seed 创建)
+  const { getDatabaseClient, getForumDatabaseClient } = await import('../../src/database/client.js');
+  const db = getDatabaseClient();
+  const forumDb = getForumDatabaseClient();
+
+  // 独立测试库，先清理本文件涉及的测试数据，确保自包含、不依赖历史 seed
+  await forumDb.execute("DELETE FROM forum_follows WHERE follower_id IN (SELECT id FROM (SELECT id FROM rap_beats_test.users WHERE username IN ('testadmin','social_test_b','social_test_c')) t) OR following_id IN (SELECT id FROM (SELECT id FROM rap_beats_test.users WHERE username IN ('testadmin','social_test_b','social_test_c')) t)");
+  await db.execute("DELETE FROM users WHERE username IN ('testadmin','social_test_b','social_test_c')");
+
+  // 动态创建 testadmin（真实 id 不再硬编码 432）
+  const admin = await db.execute(
+    "INSERT INTO users (username, email, password_hash, role, vip_level) VALUES ('testadmin', 'testadmin@test.local', 'x', 'admin', 'ultimate')"
+  );
+  ADMIN_ID = admin.insertId;
+
+  // 动态创建 social_test_b/c（nickname 节奏大师/嘻哈狂人）
+  const b = await db.execute(
+    "INSERT INTO users (username, email, password_hash, role, vip_level, nickname) VALUES ('social_test_b', 'social_test_b@rapbeats.local', 'x', 'user', 'free', '节奏大师')"
+  );
+  const c = await db.execute(
+    "INSERT INTO users (username, email, password_hash, role, vip_level, nickname) VALUES ('social_test_c', 'social_test_c@rapbeats.local', 'x', 'user', 'free', '嘻哈狂人')"
+  );
+  TEST_IDS = { bId: b.insertId, cId: c.insertId, bUsername: 'social_test_b', cUsername: 'social_test_c' };
+
+  // 建立关注关系：testadmin 关注 b/c，b 关注 testadmin（供 social/list 测试）
+  await forumDb.execute(
+    "INSERT INTO forum_follows (follower_id, following_id) VALUES (?, ?), (?, ?), (?, ?)",
+    [ADMIN_ID, TEST_IDS.bId, ADMIN_ID, TEST_IDS.cId, TEST_IDS.bId, ADMIN_ID]
+  );
+
   tokenAdmin = jwt.sign(
-    { id: 432, username: 'testadmin', email: 'testadmin@test.local', role: 'admin', vip_level: 'ultimate', avatar_url: null },
+    { id: ADMIN_ID, username: 'testadmin', email: 'testadmin@test.local', role: 'admin', vip_level: 'ultimate', avatar_url: null },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
-  // dynamic test id（用节奏大师/嘻哈狂人 nickname 反查当前 id）
-  const { getDatabaseClient } = await import('../../src/database/client.js');
-  TEST_IDS = await resolveTestIds(getDatabaseClient());
   tokenUserB = jwt.sign(
-    {
-      id: TEST_IDS.bId,
-      username: TEST_IDS.bUsername,
-      email: `${TEST_IDS.bUsername}@rapbeats.local`,
-      role: 'user',
-      vip_level: 'free',
-      avatar_url: null,
-    },
+    { id: TEST_IDS.bId, username: TEST_IDS.bUsername, email: `${TEST_IDS.bUsername}@rapbeats.local`, role: 'user', vip_level: 'free', avatar_url: null },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -77,7 +97,7 @@ describe('GET /api/user/profile/full', () => {
       .set('Authorization', `Bearer ${tokenAdmin}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.id).toBe(432);
+    expect(res.body.id).toBe(ADMIN_ID);
     expect(res.body.username).toBe('testadmin');
     expect(res.body.is_self).toBe(true);
     expect(res.body.email).toBe('testadmin@test.local');
@@ -132,7 +152,7 @@ describe('GET /api/user/social/list', () => {
     expect(Array.isArray(res.body.users)).toBe(true);
     // 验证 testadmin (432) 在 b 的粉丝列表中
     const ids = res.body.users.map((u: any) => u.id);
-    expect(ids).toContain(432);
+    expect(ids).toContain(ADMIN_ID);
     // 每条 item 字段完整
     for (const u of res.body.users) {
       expect(u).toHaveProperty('id');
@@ -147,7 +167,7 @@ describe('GET /api/user/social/list', () => {
     if (!TEST_IDS.bId) return;
     // testadmin 视角看自己 (432) 的 followers
     const res = await request(app)
-      .get('/api/user/social/list?user_id=432&type=followers')
+      .get(`/api/user/social/list?user_id=${ADMIN_ID}&type=followers`)
       .set('Authorization', `Bearer ${tokenAdmin}`);
     expect(res.status).toBe(200);
     for (const u of res.body.users) {
@@ -156,7 +176,7 @@ describe('GET /api/user/social/list', () => {
   });
 
   it('TC-SOCIAL-003 未登录访问 — 仍可拿到列表，is_followed_by_me 全 false', async () => {
-    const res = await request(app).get('/api/user/social/list?user_id=432&type=followers');
+    const res = await request(app).get(`/api/user/social/list?user_id=${ADMIN_ID}&type=followers`);
     expect(res.status).toBe(200);
     for (const u of res.body.users) {
       expect(u.is_followed_by_me).toBe(false);
@@ -219,13 +239,13 @@ describe('GET /api/users/search', () => {
     expect(res.body.total).toBe(0);
   });
 
-  it('TC-SEARCH-005 排除自己 — search 自己时不会出现在结果中', async () => {
+  it('TC-SEARCH-005 搜索自己 — 业务已不排除自己，结果应包含自己', async () => {
     const res = await request(app)
       .get('/api/users/search?q=testadmin&type=rapbeats')
       .set('Authorization', `Bearer ${tokenAdmin}`);
     expect(res.status).toBe(200);
     const ids = res.body.users.map((u: any) => u.id);
-    expect(ids).not.toContain(432);
+    expect(ids).toContain(ADMIN_ID);
   });
 
   it('TC-SEARCH-006 昵称搜索时排除 NULL nickname 行', async () => {

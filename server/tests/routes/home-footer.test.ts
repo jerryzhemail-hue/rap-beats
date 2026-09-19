@@ -122,7 +122,7 @@ describe('Home Footer Admin 接口', () => {
     const res = await request(app)
       .post('/api/admin/home-footer/faqs')
       .set(authHeader(adminToken))
-      .send({ category: '测试', question: '如何申请？', answer: '登录后申请', sort_order: 1 });
+      .send({ category: '测试', question: `如何申请_${Date.now()}`, answer: '登录后申请', sort_order: 1 });
     expect(res.status).toBe(201);
     expect(res.body.faq).toHaveProperty('id');
     return res.body.faq.id; // 供后续测试使用
@@ -158,7 +158,7 @@ describe('Home Footer FAQ CRUD', () => {
     const res = await request(app)
       .post('/api/admin/home-footer/faqs')
       .set(authHeader(adminToken))
-      .send({ category: '测试', question: '测试问题？', answer: '测试答案', sort_order: 0 });
+      .send({ category: '测试', question: `测试问题_${Date.now()}`, answer: '测试答案', sort_order: 0 });
     faqId = res.body.faq?.id ?? 0;
   });
   afterAll(() => cleanupTestUsers());

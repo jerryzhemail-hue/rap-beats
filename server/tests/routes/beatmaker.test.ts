@@ -20,7 +20,7 @@ import authRouter from '../../src/routes/auth.js';
 import express from 'express';
 import request from 'supertest';
 import { getDatabaseClient } from '../../src/database/client.js';
-import { createAdmin, createUser, authHeader, cleanupTestUsers } from '../helpers.js';
+import { createAdmin, createUser, authHeader, cleanupTestUsers, randomIdCard } from '../helpers.js';
 
 function createApp() {
   const app = buildApp();
@@ -30,13 +30,16 @@ function createApp() {
   return app;
 }
 
-const VALID_APPLICATION = {
-  real_name: '张三',
-  id_card_no: '110101199001011234',
-  portfolio_url: 'https://example.com/portfolio',
-  sample_work_url: 'https://example.com/sample',
-  bio: '我是来自北京的说唱音乐制作人，擅长 Trap 风格',
-};
+// 每次调用生成随机合法身份证号，避免固定号跨测试/跨库冲突
+function makeValidApplication() {
+  return {
+    real_name: '张三',
+    id_card_no: randomIdCard(),
+    portfolio_url: 'https://example.com/portfolio',
+    sample_work_url: 'https://example.com/sample',
+    bio: '我是来自北京的说唱音乐制作人，擅长 Trap 风格',
+  };
+}
 
 describe('Beatmaker 申请 - POST /api/beatmaker/apply', () => {
   let app: ReturnType<typeof createApp>;
@@ -49,7 +52,7 @@ describe('Beatmaker 申请 - POST /api/beatmaker/apply', () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(token))
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('application_id');
     expect(typeof res.body.application_id).toBe('number');
@@ -58,7 +61,7 @@ describe('Beatmaker 申请 - POST /api/beatmaker/apply', () => {
   it('TC-BM-002 P0 未登录返回 401', async () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
     expect(res.status).toBe(401);
   });
 
@@ -67,7 +70,7 @@ describe('Beatmaker 申请 - POST /api/beatmaker/apply', () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(token))
-      .send({ ...VALID_APPLICATION, real_name: '张' });
+      .send({ ...makeValidApplication(), real_name: '张' });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('真实姓名');
   });
@@ -77,7 +80,7 @@ describe('Beatmaker 申请 - POST /api/beatmaker/apply', () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(token))
-      .send({ ...VALID_APPLICATION, id_card_no: 'INVALID123' });
+      .send({ ...makeValidApplication(), id_card_no: 'INVALID123' });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('身份证号');
   });
@@ -87,7 +90,7 @@ describe('Beatmaker 申请 - POST /api/beatmaker/apply', () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(token))
-      .send({ ...VALID_APPLICATION, portfolio_url: 'not-a-url' });
+      .send({ ...makeValidApplication(), portfolio_url: 'not-a-url' });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('作品集链接');
   });
@@ -97,7 +100,7 @@ describe('Beatmaker 申请 - POST /api/beatmaker/apply', () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(token))
-      .send({ ...VALID_APPLICATION, bio: '太短了' });
+      .send({ ...makeValidApplication(), bio: '太短了' });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('个人简介');
   });
@@ -107,11 +110,11 @@ describe('Beatmaker 申请 - POST /api/beatmaker/apply', () => {
     await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(token))
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(token))
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
     expect(res.status).toBe(409);
     expect(res.body).toHaveProperty('application_id');
   });
@@ -124,7 +127,7 @@ describe('Beatmaker 申请 - POST /api/beatmaker/apply', () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(token))
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
     await db.execute('UPDATE users SET is_beatmaker = 0 WHERE id = ?', [userId]);
     expect(res.status).toBe(409);
     expect(res.body.error).toContain('已经是');
@@ -151,7 +154,7 @@ describe('Beatmaker 申请状态 - GET /api/beatmaker/application/me', () => {
     await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(token))
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
     const res = await request(app)
       .get('/api/beatmaker/application/me')
       .set(authHeader(token));
@@ -223,7 +226,7 @@ describe('Admin 审核列表 - GET /api/admin/beatmaker-applications', () => {
     await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(userTk))
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
   });
   afterAll(() => cleanupTestUsers());
 
@@ -267,7 +270,7 @@ describe('Admin 审核操作 - POST approve/reject', () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(userTk))
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
     applicationId = res.body.application_id;
   });
   afterAll(() => cleanupTestUsers());
@@ -293,7 +296,7 @@ describe('Admin 审核操作 - POST approve/reject', () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(userTk))
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
     const id = res.body.application_id;
     const rejectRes = await request(app)
       .post(`/api/admin/beatmaker-applications/${id}/reject`)
@@ -308,7 +311,7 @@ describe('Admin 审核操作 - POST approve/reject', () => {
     const res = await request(app)
       .post('/api/beatmaker/apply')
       .set(authHeader(userTk))
-      .send(VALID_APPLICATION);
+      .send(makeValidApplication());
     const id = res.body.application_id;
     const rejectRes = await request(app)
       .post(`/api/admin/beatmaker-applications/${id}/reject`)

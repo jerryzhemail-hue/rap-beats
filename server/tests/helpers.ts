@@ -11,6 +11,27 @@ export function unique(prefix = 'test') {
   return `${prefix}_${rand.slice(0, 12)}`;
 }
 
+/** 生成合法的 18 位身份证号（随机地区 + 出生日期 + 校验码），避免固定号跨测试冲突 */
+export function randomIdCard(): string {
+  // 前 6 位：随机地区码（合法范围 110000-659004，这里用常见地区）
+  const area = ['110101', '310101', '440101', '510101', '330101', '210101'][
+    Math.floor(Math.random() * 6)
+  ];
+  // 出生日期：1980-2005 之间随机
+  const year = 1980 + Math.floor(Math.random() * 26);
+  const month = String(1 + Math.floor(Math.random() * 12)).padStart(2, '0');
+  const day = String(1 + Math.floor(Math.random() * 28)).padStart(2, '0');
+  // 顺序码：3 位随机
+  const seq = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+  const raw = `${area}${year}${month}${day}${seq}`;
+  // 校验码（GB 11643-1999，MOD 11-2）
+  const weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+  const checkMap = ['1', '0', 'X', '9', '8', '7', '6', '5', '4', '3', '2'];
+  let sum = 0;
+  for (let i = 0; i < 17; i++) sum += parseInt(raw[i]) * weights[i];
+  return raw + checkMap[sum % 11];
+}
+
 /** 注册一个新用户，返回 { body, token } */
 export async function registerUser(
   app: Express,
