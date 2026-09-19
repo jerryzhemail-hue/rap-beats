@@ -26,6 +26,31 @@ export async function initDatabase(
   membershipDb: import('./client.js').DatabaseClient,
 ) {
 
+  // ─── schema 版本迁移 ────────────────────────────────────────────────
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INT PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // 幂等迁移执行器：version 已应用则跳过；
+  // alreadyApplied 用于兼容历史库（列已存在但未记录版本时，直接标记为已应用）
+  async function migrate(version: number, name: string, sqls: string[], alreadyApplied?: () => Promise<boolean>) {
+    const done = await db.queryOne<{ version: number }>(
+      'SELECT version FROM schema_migrations WHERE version = ?', [version]);
+    if (done) return;
+    if (alreadyApplied && await alreadyApplied()) {
+      await db.execute('INSERT INTO schema_migrations (version, name) VALUES (?, ?)', [version, name]);
+      console.log(`[migrate] v${version} ${name} 已存在，标记为已应用`);
+      return;
+    }
+    for (const sql of sqls) await db.execute(sql);
+    await db.execute('INSERT INTO schema_migrations (version, name) VALUES (?, ?)', [version, name]);
+    console.log(`[migrate] applied v${version} ${name}`);
+  }
+
   // rappers 表
   await db.execute(`
     CREATE TABLE IF NOT EXISTS rappers (
@@ -98,18 +123,21 @@ export async function initDatabase(
   try { await db.execute("ALTER TABLE users ADD COLUMN beatmaker_certified_at DATETIME NULL AFTER is_beatmaker"); } catch (_) { /* ignore */ }
   try { await db.execute("CREATE INDEX idx_users_is_beatmaker ON users(is_beatmaker)"); } catch (_) { /* ignore */ }
 
-  // ─── 昵称 + IP 归属地（个人中心需求 P0） ────────────────────────────────
-  // 已有表升级时幂等：try/catch 包住，每条 ADD COLUMN 单独 catch，确保列已存在时不报错
-  try { await db.execute("ALTER TABLE users ADD COLUMN nickname VARCHAR(50) NULL UNIQUE AFTER username"); } catch (_) { /* ignore */ }
-  try { await db.execute("ALTER TABLE users ADD COLUMN nickname_pinyin VARCHAR(255) NULL AFTER nickname"); } catch (_) { /* ignore */ }
-  try { await db.execute("CREATE INDEX idx_users_nickname_pinyin ON users(nickname_pinyin)"); } catch (_) { /* ignore */ }
-  try { await db.execute("ALTER TABLE users ADD COLUMN register_ip VARCHAR(64) NULL AFTER created_at"); } catch (_) { /* ignore */ }
-  // ─── 个人简介 bio ────────────────────────────────────────────────────────
-  try { await db.execute("ALTER TABLE users ADD COLUMN bio TEXT NULL AFTER nickname_pinyin"); } catch (_) { /* ignore */ }
-  try { await db.execute("ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(64) NULL AFTER register_ip"); } catch (_) { /* ignore */ }
-  // 归属地缓存：JSON 字符串，结构 {country, province, city, isp}
-  try { await db.execute("ALTER TABLE users ADD COLUMN register_region VARCHAR(100) NULL COMMENT '注册 IP 归属地 JSON' AFTER register_ip"); } catch (_) { /* ignore */ }
-  try { await db.execute("ALTER TABLE users ADD COLUMN last_login_region VARCHAR(100) NULL COMMENT '最近登录 IP 归属地 JSON' AFTER last_login_ip"); } catch (_) { /* ignore */ }
+  // ─── v1: 用户资料扩展（昵称/IP 归属地，个人中心需求 P0）─────────────
+  await migrate(1, 'users nickname + ip region', [
+    "ALTER TABLE users ADD COLUMN nickname VARCHAR(50) NULL UNIQUE AFTER username",
+    "ALTER TABLE users ADD COLUMN nickname_pinyin VARCHAR(255) NULL AFTER nickname",
+    "CREATE INDEX idx_users_nickname_pinyin ON users(nickname_pinyin)",
+    "ALTER TABLE users ADD COLUMN register_ip VARCHAR(64) NULL AFTER created_at",
+    "ALTER TABLE users ADD COLUMN bio TEXT NULL AFTER nickname_pinyin",
+    "ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(64) NULL AFTER register_ip",
+    "ALTER TABLE users ADD COLUMN register_region VARCHAR(100) NULL COMMENT '注册 IP 归属地 JSON' AFTER register_ip",
+    "ALTER TABLE users ADD COLUMN last_login_region VARCHAR(100) NULL COMMENT '最近登录 IP 归属地 JSON' AFTER last_login_ip",
+  ], async () => {
+    const col = await db.queryOne<{ COLUMN_NAME: string }>(
+      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'nickname'");
+    return !!col;
+  });
 
   // IP 历史日志表（追踪 IP 与归属地变更）
   await db.execute(`
