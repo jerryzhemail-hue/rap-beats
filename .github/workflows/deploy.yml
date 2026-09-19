@@ -3,6 +3,8 @@ name: Build & Deploy
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -13,8 +15,64 @@ env:
   CLIENT_IMAGE_SHA: ghcr.io/${{ github.repository_owner }}/rap-beats-client:${{ github.sha }}
 
 jobs:
+  test:
+    name: Backend Tests (vitest 全量)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_2024
+          MYSQL_USER: dev_user
+          MYSQL_PASSWORD: dev_pass_2024
+          MYSQL_CHARSET: utf8mb4
+          MYSQL_COLLATION: utf8mb4_unicode_ci
+          TZ: Asia/Shanghai
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --health-start-period 30s
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
+      - name: Install server deps
+        working-directory: server
+        run: npm ci || npm install
+      - name: Create test databases & grant
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3307 -uroot -pci_root_2024 --silent 2>/dev/null; then
+              echo "MySQL ready"; break
+            fi
+            sleep 2
+          done
+          mysql -h 127.0.0.1 -P 3307 -uroot -pci_root_2024 <<'SQL'
+            CREATE DATABASE IF NOT EXISTS rap_beats_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            CREATE DATABASE IF NOT EXISTS rap_beats_forum_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            CREATE DATABASE IF NOT EXISTS rap_beats_membership_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+            GRANT ALL PRIVILEGES ON rap_beats_test.* TO 'dev_user'@'%';
+            GRANT ALL PRIVILEGES ON rap_beats_forum_test.* TO 'dev_user'@'%';
+            GRANT ALL PRIVILEGES ON rap_beats_membership_test.* TO 'dev_user'@'%';
+            FLUSH PRIVILEGES;
+          SQL
+      - name: Run vitest (全量测试)
+        working-directory: server
+        run: npm test
+
   build:
     name: Build Docker Images
+    needs: test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -89,6 +147,7 @@ jobs:
   deploy:
     name: Deploy to Server
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: production
 
