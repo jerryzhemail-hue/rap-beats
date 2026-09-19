@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
+import { validateUsername, validateEmail, validateNickname, validateBio } from '../utils/validation.js';
 import { getDatabaseClient, getForumDatabaseClient } from '../database/client.js';
 import {
   canAccessHighQuality,
@@ -140,39 +141,16 @@ router.put('/user/profile', requireAuth, async (req: AuthRequest, res) => {
   if (!username || !email) {
     return res.status(400).json({ error: '用户名和邮箱不能为空' });
   }
-  if (username.length < 3 || username.length > 20) {
-    return res.status(400).json({ error: '用户名需要3-20个字符' });
-  }
-  // 用户名仅允许字母/数字/下划线/连字符
-  if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
-    return res.status(400).json({ error: '用户名仅支持字母、数字、下划线和连字符' });
-  }
-  // 邮箱长度限制
-  if (email.length > 254) {
-    return res.status(400).json({ error: '邮箱长度不能超过 254 字符' });
-  }
+  const usernameErr = validateUsername(username);
+  if (usernameErr) return res.status(400).json({ error: usernameErr });
+  const emailErr = validateEmail(email);
+  if (emailErr) return res.status(400).json({ error: emailErr });
+  const nicknameErr = validateNickname(nickname);
+  if (nicknameErr) return res.status(400).json({ error: nicknameErr });
+  const bioErr = validateBio(bio);
+  if (bioErr) return res.status(400).json({ error: bioErr });
 
-  // 昵称校验（可选字段）
-  if (nickname !== undefined && nickname !== null && nickname !== '') {
-    if (nickname.length < 2 || nickname.length > 20) {
-      return res.status(400).json({ error: '昵称需要2-20个字符' });
-    }
-    // 禁止 HTML / 控制字符，避免任何潜在的 v-html 误用造成 XSS
-    if (/[<>]|[\x00-\x1F\x7F]/.test(nickname)) {
-      return res.status(400).json({ error: '昵称不允许包含 < > 或控制字符' });
-    }
-  }
   const finalNickname = (nickname && nickname.trim()) || null;
-
-  // bio 校验（可选字段，最多 500 字）
-  if (bio !== undefined && bio !== null && bio !== '') {
-    if (bio.length > 500) {
-      return res.status(400).json({ error: '个人简介不能超过 500 字符' });
-    }
-    if (/[<>]/.test(bio)) {
-      return res.status(400).json({ error: '个人简介不允许包含 < >' });
-    }
-  }
   const finalBio = (bio !== undefined) ? (bio || null) : undefined;
 
   // 唯一性冲突检查（用户名 / 邮箱 / 昵称三者均不能与他人重复）

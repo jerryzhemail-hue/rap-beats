@@ -266,7 +266,10 @@ router.post('/forum/messages', requireAuth, messageLimiter, async (req: AuthRequ
     return res.status(403).json({ error: '你已拉黑该用户，无法发送消息' });
   }
 
-  // 限制：无论是否互相关注，只要对方没回复过你，就只能发 1 条消息
+  // 消息防骚扰规则（产品最终口径，2026-09 定稿）：
+  // 规则从「互不关注时限制 1 条」简化为「无论是否互相关注，只要对方尚未回复你，
+  // 就最多只能发 1 条文字消息」——目的是在保留发起私信能力的同时，
+  // 防止单方面持续轰炸。对方回复后即解除限制，可正常对话。
   const conversationId = generateConversationId(senderId, receiver_id);
   const theirReply = await db.queryOne<{ id: number }>(
     `SELECT id FROM forum_messages

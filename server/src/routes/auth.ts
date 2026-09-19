@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { requireAuth, AuthRequest, JWT_SECRET } from '../middleware/auth.js';
 import { getDatabaseClient } from '../database/client.js';
 import { getEffectiveVipLevel } from '../middleware/vip.js';
+import { validateUsername, validateEmail } from '../utils/validation.js';
 import { serializeUserAssets } from '../utils/assets.js';
 import { createRateLimiter } from '../middleware/rateLimit.js';
 
@@ -34,22 +35,10 @@ router.post('/register', registerLimiter, async (req, res) => {
     return res.status(400).json({ error: '请填写所有必填字段' });
   }
 
-  if (username.length < 3 || username.length > 20) {
-    return res.status(400).json({ error: '用户名长度需在3-20字符之间' });
-  }
-  // 用户名仅允许字母/数字/下划线/连字符（与搜索/URL 兼容性一致）
-  if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
-    return res.status(400).json({ error: '用户名仅支持字母、数字、下划线和连字符' });
-  }
-
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(email)) {
-    return res.status(400).json({ error: '邮箱格式不正确' });
-  }
-  // email 实际存储上限 255，留 1 字符 buffer 提示用户
-  if (email.length > 254) {
-    return res.status(400).json({ error: '邮箱长度不能超过 254 字符' });
-  }
+  const usernameErr = validateUsername(username);
+  if (usernameErr) return res.status(400).json({ error: usernameErr });
+  const emailErr = validateEmail(email);
+  if (emailErr) return res.status(400).json({ error: emailErr });
 
   if (password.length < 6) {
     return res.status(400).json({ error: '密码至少需要6位' });

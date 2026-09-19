@@ -946,9 +946,12 @@ router.get('/home/public', async (_req: Request, res: Response) => {
   const serializedFree = freeBeats.map((b: any) => serializeBeatAssets(b));
 
   // 首页「社区动态」：取论坛库最近 5 条已发布帖子
-  // 失败兜底返回 []，避免影响首页整体加载
-  // 注意：forum 库没有 users 表，username/avatar 需跨库查主库 users
-  // 缺失的 forum user_id 已通过 scripts/seed-forum-users.sql 补齐到主库
+  // 设计说明：forum 库没有 users 表，user_id 是裸外键，因此跨库查主库 users 拿
+  // username/avatar 是必要且合理的；查询失败兜底返回 []，不影响首页整体加载。
+  // 兜底策略（两层）：
+  //   1) 代码层：主库查不到的用户显示「论坛用户#<id>」占位（见下方映射逻辑）；
+  //   2) 数据层（可选优化）：scripts/seed-forum-users.sql 可把缺失的 forum user_id
+  //      补成主库占位用户（forum_user_<id>），让首页显示更统一。非必需。
   let forumPosts: any[] = [];
   try {
     const forumDb = getForumDatabaseClient();
