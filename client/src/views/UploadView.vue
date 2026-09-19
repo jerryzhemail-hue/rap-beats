@@ -46,6 +46,7 @@ const coverDragOver = ref(false)
 const uploading = ref(false)
 const uploadProgress = ref(0)
 const detectingBpm = ref(false)
+const detectingKey = ref(false)
 const bpmDetectProgress = ref(0)
 const errorMessage = ref('')
 const successMessage = ref('')
@@ -252,6 +253,24 @@ async function handleDetectBpm() {
     errorMessage.value = err.message || '识别失败'
   } finally {
     detectingBpm.value = false
+  }
+}
+
+async function handleDetectKey() {
+  if (!audioFile.value) return
+  detectingKey.value = true
+  errorMessage.value = ''
+  try {
+    const result = await detectBpmFromFile(audioFile.value)
+    if (result.key) {
+      musicKey.value = result.key
+    } else {
+      errorMessage.value = '未能识别调性，请手动填写'
+    }
+  } catch (err: any) {
+    errorMessage.value = err.message || '识别失败'
+  } finally {
+    detectingKey.value = false
   }
 }
 
@@ -477,7 +496,7 @@ async function submitUpload() {
               <button
                 type="button"
                 class="btn-detect-bpm"
-                :disabled="!audioFile || detectingBpm"
+                :disabled="!audioFile || detectingBpm || detectingKey"
                 @click="handleDetectBpm"
               >
                 <template v-if="detectingBpm">识别中 {{ bpmDetectProgress }}%</template>
@@ -493,8 +512,19 @@ async function submitUpload() {
 
           <div class="form-group">
             <label>调性</label>
-            <input v-model="musicKey" type="text" placeholder="如 C major、F# minor" />
-            <p class="field-hint">点击「自动识别」从音频自动获取调性</p>
+            <div class="key-input-row">
+              <input v-model="musicKey" type="text" placeholder="如 C major、F# minor" />
+              <button
+                type="button"
+                class="btn-detect-bpm"
+                :disabled="!audioFile || detectingKey || detectingBpm"
+                @click="handleDetectKey"
+              >
+                <template v-if="detectingKey">识别中…</template>
+                <template v-else>自动识别</template>
+              </button>
+            </div>
+            <p class="field-hint">从音频自动识别调性（如 C major、F# minor），也可手动填写。</p>
           </div>
 
           <div class="form-group">
@@ -865,13 +895,15 @@ async function submitUpload() {
   flex: 1;
 }
 
-.bpm-input-row {
+.bpm-input-row,
+.key-input-row {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-.bpm-input-row input {
+.bpm-input-row input,
+.key-input-row input {
   flex: 1;
 }
 

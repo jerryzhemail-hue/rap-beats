@@ -3,6 +3,10 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { promisify } from 'util';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const unlinkAsync = promisify(fs.unlink);
 const writeFileAsync = promisify(fs.writeFile);
@@ -95,7 +99,80 @@ async function detectViaSidecar(buffer: Buffer, filename: string): Promise<BpmDe
   }
 }
 
-// ─── Original JS detector (fallback) ────────────────────────────────────────
+// ─── Sidecar health check ────────────────────────────────────────────────────
+
+/**
+ * 探测 sidecar 是否可用。后端启动时调用，用于在日志中明确提示
+ * 当前走的是 sidecar 还是降级链路（Python 子进程 / JS）。
+ */
+export async function checkSidecarHealth(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const r = await fetch(`${SIDECAR_BASE_URL}/health`, { signal: controller.signal });
+      return r.ok;
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return false;
+  }
+}
+
+// ─── Python subprocess fallback (has key detection) ──────────────────────────
+
+const PYTHON_TIMEOUT_MS = 60000; // 60s — librosa analysis on 60s window
+
+async function detectViaPython(filePath: string): Promise<BpmDetectionResult | null> {
+  return new Promise((resolve) => {
+    // Find the detect_bpm.py script relative to server/src
+    const scriptPath = path.resolve(__dirname, '../scripts/detect_bpm.py');
+    const proc = spawn('python3', [scriptPath, filePath, '--json']);
+
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      resolve(null);
+    }, PYTHON_TIMEOUT_MS);
+
+    proc.stdout.on('data', (c: Buffer) => { stdout += c.toString(); });
+    proc.stderr.on('data', (c: Buffer) => { stderr += c.toString(); });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (code !== 0 || !stdout.trim()) {
+        if (stderr.trim()) {
+          console.warn(`[BpmDetector] python fallback exited ${code}: ${stderr.trim()}`);
+        }
+        resolve(null);
+        return;
+      }
+      try {
+        const json = JSON.parse(stdout.trim());
+        resolve({
+          bpm: json.bpm ?? 0,
+          confidence: json.confidence ?? 0,
+          beat_count: json.beat_count ?? 0,
+          duration_seconds: json.duration_seconds ?? 0,
+          onset_strength_mean: json.onset_strength_mean ?? 0,
+          key: json.key ?? '',
+          key_root: json.key_root ?? '',
+          key_mode: json.key_mode ?? '',
+          key_confidence: json.key_confidence ?? 0,
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+    proc.on('error', () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+}
+
+// ─── Original JS detector (fallback — BPM only, no key) ────────────────────
 
 function decodeToPcm(filePath: string, timeoutMs = 30000): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -215,7 +292,7 @@ async function detectFromFile(filePath: string): Promise<BpmDetectionResult | nu
 
 /**
  * Detect BPM from an audio buffer (MP3/WAV/FLAC/M4A/OGG).
- * Strategy: sidecar (librosa v5) first → JS fallback if unavailable/timeout/error.
+ * Strategy: sidecar (librosa v5) first → Python subprocess fallback → JS fallback.
  */
 export async function detectBpmFromBuffer(
   buffer: Buffer,
@@ -227,14 +304,24 @@ export async function detectBpmFromBuffer(
     return sidecarResult;
   }
 
-  // Fallback: original JS detector
+  // Fallback 1: Python subprocess (has key detection)
   const ext = path.extname(originalName).toLowerCase() || '.mp3';
-  const tmpFile = path.join(os.tmpdir(), `bpm_js_${Date.now()}${ext}`);
+  const tmpFile = path.join(os.tmpdir(), `bpm_py_${Date.now()}${ext}`);
   try {
     await writeFileAsync(tmpFile, buffer);
+    const pyResult = await detectViaPython(tmpFile);
+    if (pyResult && pyResult.bpm > 0) {
+      return pyResult;
+    }
+  } catch (err) {
+    console.warn('[BpmDetector] Python fallback failed:', (err as Error).message);
+  }
+
+  // Fallback 2: JS detector (BPM only, no key)
+  try {
     return await detectFromFile(tmpFile);
   } catch (err) {
-    console.error('[BpmDetector] both sidecar and JS fallback failed:', err);
+    console.error('[BpmDetector] all fallbacks failed:', err);
     return null;
   } finally {
     try { await unlinkAsync(tmpFile); } catch { /* ignore */ }
@@ -243,14 +330,23 @@ export async function detectBpmFromBuffer(
 
 /**
  * Detect BPM from a local file path.
- * Uses JS detector (sidecar not applicable for path-based access).
+ * Uses Python subprocess (has key detection) → JS fallback.
  */
 export async function detectBpmFromFile(filePath: string): Promise<BpmDetectionResult | null> {
+  try {
+    const pyResult = await detectViaPython(filePath);
+    if (pyResult && pyResult.bpm > 0) {
+      return pyResult;
+    }
+  } catch (err) {
+    console.warn('[BpmDetector] Python fallback failed for file:', (err as Error).message);
+  }
+  // JS fallback
   return detectFromFile(filePath);
 }
 
 /**
- * Detect BPM from an OSS URL: download to temp file, then sidecar → JS fallback.
+ * Detect BPM from an OSS URL: download to temp file, then sidecar → Python fallback → JS fallback.
  */
 export async function detectBpmFromUrl(ossUrl: string): Promise<BpmDetectionResult | null> {
   const tmpFile = path.join(os.tmpdir(), `bpm_url_${Date.now()}.mp3`);
@@ -261,10 +357,16 @@ export async function detectBpmFromUrl(ossUrl: string): Promise<BpmDetectionResu
       curl.on('error', reject);
     });
     const buf = await fs.promises.readFile(tmpFile);
-    // Try sidecar first (more accurate)
+
+    // Try sidecar first
     const sidecarResult = await detectViaSidecar(buf, path.basename(tmpFile));
     if (sidecarResult && sidecarResult.bpm > 0) return sidecarResult;
-    // Fallback: JS detector
+
+    // Python fallback
+    const pyResult = await detectViaPython(tmpFile);
+    if (pyResult && pyResult.bpm > 0) return pyResult;
+
+    // JS fallback
     return await detectFromFile(tmpFile);
   } catch (err) {
     console.error('[BpmDetector] URL detection failed:', err);

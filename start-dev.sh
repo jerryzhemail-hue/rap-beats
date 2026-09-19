@@ -35,10 +35,14 @@ SERVER_LOG="/tmp/rap-beats-server.log"
 CLIENT_LOG="/tmp/rap-beats-client.log"
 SERVER_PID="/tmp/rap-beats-server.pid"
 CLIENT_PID="/tmp/rap-beats-client.pid"
+SIDECAR_LOG="/tmp/rap-beats-sidecar.log"
+SIDECAR_PID="/tmp/rap-beats-sidecar.pid"
 BACKEND_URL="http://localhost:3000/api/health"
+SIDECAR_URL="http://localhost:5050/health"
 
 port_listening() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 backend_ready()  { curl -sf "$BACKEND_URL" >/dev/null 2>&1; }
+sidecar_ready() { curl -sf "$SIDECAR_URL" >/dev/null 2>&1; }
 
 ensure_colima() {
   info "检查 Colima..."
@@ -91,6 +95,31 @@ ensure_mysql() {
   docker exec "$MYSQL_CONTAINER" mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "$sql" >/dev/null 2>&1 \
     || { err "数据库初始化失败，查看: docker compose -f $COMPOSE_FILE logs mysql"; exit 1; }
   log "数据库 $DEV_DB_NAME / $FORUM_DB_NAME / $MEMBERSHIP_DB_NAME 已就绪"
+}
+
+start_sidecar() {
+  if sidecar_ready; then
+    log "BPM/调性识别 sidecar 已在运行 (http://localhost:5050)"
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "未找到 python3，跳过 BPM/调性识别 sidecar（调性自动识别将不可用）"
+    return 0
+  fi
+  if ! python3 -c "import flask, librosa, numpy, scipy" >/dev/null 2>&1; then
+    warn "Python 依赖缺失，跳过 sidecar。安装：cd bpm_service && pip install -r requirements.txt"
+    return 0
+  fi
+  info "启动 BPM/调性识别 sidecar（librosa，日志 ${SIDECAR_LOG}）..."
+  ( cd "$ROOT/bpm_service" && nohup python3 server.py > "$SIDECAR_LOG" 2>&1 & echo $! > "$SIDECAR_PID" )
+  for i in $(seq 1 20); do
+    if sidecar_ready; then log "sidecar 就绪 http://localhost:5050"; return 0; fi
+    if [ -f "$SIDECAR_PID" ] && ! kill -0 "$(cat "$SIDECAR_PID" 2>/dev/null)" 2>/dev/null; then
+      warn "sidecar 启动失败，最近日志："; tail -20 "$SIDECAR_LOG" 2>/dev/null || true; return 0
+    fi
+    sleep 1
+  done
+  warn "sidecar 20 秒内未就绪，查看日志: tail -f $SIDECAR_LOG"
 }
 
 start_backend() {
@@ -150,6 +179,16 @@ start_frontend() {
   warn "前端 40 秒内未就绪，查看日志: tail -f $CLIENT_LOG"
 }
 
+stop_sidecar() {
+  # sidecar 若由 launchd 常驻管理（KeepAlive 会自动拉起），此处不 kill，
+  # 否则 kill 后 5 秒又会被 launchd 重启，stop 语义会失效。
+  if launchctl list com.rapbeats.bpm-sidecar >/dev/null 2>&1; then
+    return 0
+  fi
+  [ -f "$SIDECAR_PID" ] && kill "$(cat "$SIDECAR_PID" 2>/dev/null)" 2>/dev/null || true
+  rm -f "$SIDECAR_PID"
+  lsof -ti:5050 | xargs kill 2>/dev/null || true
+}
 stop_backend() {
   [ -f "$SERVER_PID" ] && kill "$(cat "$SERVER_PID" 2>/dev/null)" 2>/dev/null || true
   rm -f "$SERVER_PID"
@@ -171,6 +210,7 @@ show_status() {
   if [[ "$m" == "healthy" ]]; then echo -e "  ${GREEN}✓${NC} MySQL(3307)  $MYSQL_CONTAINER"; else echo -e "  ${RED}✗${NC} MySQL(3307)  状态: $m"; fi
   if backend_ready; then echo -e "  ${GREEN}✓${NC} 后端        http://localhost:3000"; else echo -e "  ${RED}✗${NC} 后端        未运行"; fi
   if port_listening 5173; then echo -e "  ${GREEN}✓${NC} 前端        http://localhost:5173"; else echo -e "  ${RED}✗${NC} 前端        未运行"; fi
+  if sidecar_ready; then echo -e "  ${GREEN}✓${NC} Sidecar    http://localhost:5050（BPM/调性识别）"; else echo -e "  ${RED}✗${NC} Sidecar    未运行（调性自动识别不可用）"; fi
   echo ""
   echo -e "${YELLOW}常用命令：${NC}"
   echo "  启动:   ./start-dev.sh"
@@ -187,6 +227,7 @@ start_all() {
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   ensure_colima
   ensure_mysql
+  start_sidecar
   start_backend
   start_frontend
   warmup_tag_algorithm
@@ -201,6 +242,7 @@ usage() {
 case "${1:-start}" in
   start) start_all ;;
   stop)
+    stop_sidecar
     stop_backend
     stop_frontend
     if [[ "${2:-}" == "--all" ]]; then
@@ -211,8 +253,8 @@ case "${1:-start}" in
     ;;
   status) show_status ;;
   logs)
-    touch "$SERVER_LOG" "$CLIENT_LOG"
-    tail -F "$SERVER_LOG" "$CLIENT_LOG"
+    touch "$SERVER_LOG" "$CLIENT_LOG" "$SIDECAR_LOG"
+    tail -F "$SERVER_LOG" "$CLIENT_LOG" "$SIDECAR_LOG"
     ;;
   *) usage ;;
 esac

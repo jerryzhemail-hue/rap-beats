@@ -8,6 +8,7 @@ import {
   initMySqlDatabaseClientFromEnv,
 } from './database/index.js';
 import { initStorage } from './services/storage.js';
+import { checkSidecarHealth } from './services/bpmDetector.js';
 import multer from 'multer';
 
 const app = buildApp();
@@ -54,6 +55,12 @@ async function startServer() {
   // 初始化存储
   initStorage();
 
+  // 探测 BPM/调性 sidecar（失败会自动降级到 Python 子进程 / JS 检测）
+  const sidecarOk = await checkSidecarHealth();
+  console.log(sidecarOk
+    ? '[BpmDetector] sidecar 可用（librosa，最准确）'
+    : '[BpmDetector] sidecar 不可用，将降级到 Python 子进程 / JS 检测');
+
   // 动态 import 路由以避免循环依赖
   const [
     { default: beatsRouter },
@@ -63,6 +70,8 @@ async function startServer() {
     { default: favoritesRouter },
     { default: commentsRouter },
     { default: userRouter },
+    { default: userSearchRouter },
+    { default: userSocialRouter },
     { default: adminRouter },
     { default: paymentRouter },
     { default: bannersRouter },
@@ -81,6 +90,8 @@ async function startServer() {
     import('./routes/favorites.js'),
     import('./routes/comments.js'),
     import('./routes/user.js'),
+    import('./routes/user-search.js'),
+    import('./routes/user-social.js'),
     import('./routes/admin.js'),
     import('./routes/payment.js'),
     import('./routes/banners.js'),
@@ -101,6 +112,8 @@ async function startServer() {
   app.use('/api', favoritesRouter);
   app.use('/api', commentsRouter);
   app.use('/api', userRouter);
+  app.use('/api', userSearchRouter);
+  app.use('/api', userSocialRouter);
   app.use('/api', adminRouter);
   app.use('/api/admin/beatmaker-applications', adminBeatmakerRouter);
   app.use('/api/admin/notifications', adminNotificationsRouter);

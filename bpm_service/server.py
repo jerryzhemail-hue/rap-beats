@@ -219,4 +219,10 @@ def detect():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    # 生产级 WSGI server（waitress），比 Flask 自带的 dev server 稳定；
+    # 若未安装 waitress 则回退到 Flask dev server（仅限临时本地调试）。
+    try:
+        from waitress import serve
+        serve(app, host="0.0.0.0", port=port, threads=4, channel_timeout=120)
+    except ImportError:
+        app.run(host="0.0.0.0", port=port, threaded=True)

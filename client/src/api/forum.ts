@@ -1,8 +1,8 @@
 import { request } from './request';
 import { requestUploadTarget, uploadFileToTarget, type DirectUploadTarget } from './directUpload';
 
-// 共享类型(API 契约)从 shared/forum 统一引入,这里是向后兼容的 re-export
-export type {
+// 共享类型(API 契约)从 shared/forum 统一引入
+import type {
   ForumCategory,
   ForumTopic,
   ForumMessageType,
@@ -16,6 +16,22 @@ export type {
   PaginatedList,
   ApiError,
 } from '@shared/forum';
+
+// 向后兼容的 re-export（其他模块仍可从 @/api/forum 引入这些类型）
+export type {
+  ForumCategory,
+  ForumTopic,
+  ForumMessageType,
+  ForumMessage,
+  ForumConversationOtherUser,
+  ForumConversation,
+  SocialLinks,
+  ForumUserProfile,
+  ForumUser,
+  Pagination,
+  PaginatedList,
+  ApiError,
+};
 
 export interface ForumPost {
   id: number;
