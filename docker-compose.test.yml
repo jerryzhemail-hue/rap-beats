@@ -10,7 +10,7 @@ name: rap-beats
 #
 # 启动：
 #   docker compose -f docker-compose.test.yml up -d mysql
-#   docker exec rap-beats-test-mysql mysql -uroot -ptest_root_2024 -e "CREATE DATABASE IF NOT EXISTS rap_beats_forum CHARACTER SET utf8mb4"
+#   docker exec rap-beats-test-mysql mysql -uroot -ptest_root_2024 -e "CREATE DATABASE IF NOT EXISTS rap_beats_forum_test CHARACTER SET utf8mb4"
 #   docker compose -f docker-compose.test.yml up -d
 # 停止：docker compose -f docker-compose.test.yml down
 # 清数据：docker compose -f docker-compose.test.yml down -v
@@ -22,7 +22,7 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: test_root_2024
-      MYSQL_DATABASE: rap_beats
+      MYSQL_DATABASE: rap_beats_test
       MYSQL_CHARSET: utf8mb4
       MYSQL_COLLATION: utf8mb4_unicode_ci
       TZ: Asia/Shanghai
@@ -47,8 +47,8 @@ services:
       DB_PORT: 3306
       DB_USER: root
       DB_PASSWORD: test_root_2024
-      DB_NAME: rap_beats
-      FORUM_DB_NAME: rap_beats_forum
+      DB_NAME: rap_beats_test
+      FORUM_DB_NAME: rap_beats_test_forum
       JWT_SECRET: test-jwt-secret-0123456789abcdef0123456789abcdef
       STORAGE_DRIVER: local
       BASE_URL: http://localhost:8080

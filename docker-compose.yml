@@ -65,6 +65,7 @@ services:
       DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
       DB_NAME: ${DB_NAME:-rap_beats}
       FORUM_DB_NAME: ${FORUM_DB_NAME:-rap_beats_forum}
+      MEMBERSHIP_DB_NAME: ${MEMBERSHIP_DB_NAME:-rap_beats_membership}
       # BPM Sidecar — librosa v5
       BPM_SIDECAR_URL: http://rap-beats-bpm:5050
       # JWT
