@@ -9,9 +9,10 @@ WORKDIR /app
 COPY server/package.json server/package-lock.json* ./
 RUN npm ci
 
-# 复制源码并编译
+# 复制源码并编译（shared 是前后端共享类型，server 编译时依赖 @shared/forum）
 COPY server/tsconfig.json ./
 COPY server/src ./src
+COPY shared ./shared
 RUN npm run build
 
 # ============================================================

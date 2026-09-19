@@ -9,8 +9,9 @@ WORKDIR /app
 COPY client/package.json client/package-lock.json* ./
 RUN npm ci
 
-# 复制前端源码
+# 复制前端源码（shared 是前后端共享类型契约）
 COPY client/ ./
+COPY shared ./shared
 
 # 构建生产版本
 RUN npm run build
