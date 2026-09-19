@@ -40,7 +40,7 @@
   "ssh": {
     "enabled": false,
     "user": "root",
-    "host": "47.85.98.237",
+    "host": "<YOUR_SERVER_IP>",
     "port": 22,
     "deployDir": "/opt/rap-beats",
     "timeoutMs": 15000,

@@ -94,3 +94,6 @@ client/test-results/
 scripts/tmp
 package.json
 package-lock.json
+
+# 监控配置（含部署服务器信息，不入仓）
+monitor/config.json
