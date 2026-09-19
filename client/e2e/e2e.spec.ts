@@ -48,7 +48,7 @@ test('TC-E2E-001 首页正常加载，包含 Footer', async ({ page }) => {
 // ── TC-E2E-002 P0 用户注册流程 ──────────────────────────────────────────────
 test('TC-E2E-002 注册成功，跳转首页', async ({ page }) => {
   await page.goto(`${BASE}/register`)
-  const username = `e2e_reg_${Date.now()}`
+  const username = `e2e_${Date.now().toString().slice(-8)}`  // ≤20 字符，避免触发 3-20 校验
   await page.fill('input[placeholder*="3-20"]', username)
   await page.fill('input[placeholder*="email"]', `${username}@test.com`)
   await page.fill('input[placeholder*="至少6个"]', 'Test@1234')
@@ -70,8 +70,8 @@ test('TC-E2E-003 登录成功进入首页', async ({ page }) => {
 })
 
 // ── TC-E2E-004 P0 Beats 列表页需登录 ────────────────────────────────────────
-test('TC-E2E-004 未登录访问 /beats 重定向到登录', async ({ page }) => {
-  await page.goto(`${BASE}/beats`)
+test('TC-E2E-004 未登录访问 /profile 重定向到登录', async ({ page }) => {
+  await page.goto(`${BASE}/profile`)
   await page.waitForURL(/\/login/, { timeout: 8000 })
   await expect(page).toHaveURL(/\/login/)
 })
@@ -80,7 +80,7 @@ test('TC-E2E-004 未登录访问 /beats 重定向到登录', async ({ page }) =>
 test('TC-E2E-005 Footer 显示版权和联系信息', async ({ page }) => {
   await page.goto(`${BASE}/`)
   await page.waitForSelector('footer', { timeout: 8000 })
-  const footerText = page.locator('footer').textContent() ?? ''
+  const footerText = (await page.locator('footer').textContent()) ?? ''
   expect(footerText.length).toBeGreaterThan(10)
   const copyrightKeywords = ['©', 'rap', 'Rap', 'rapbeats', 'Rap Beats', '2026']
   const hasCopyright = copyrightKeywords.some(k => footerText.includes(k))

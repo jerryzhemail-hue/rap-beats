@@ -86,3 +86,11 @@ __pycache__/
 .pnpm-store/
 pnpm-lock.yaml
 pnpm-workspace.yaml
+
+# Playwright 测试产物
+client/test-results/
+
+# 临时符号链接/空文件
+scripts/tmp
+package.json
+package-lock.json

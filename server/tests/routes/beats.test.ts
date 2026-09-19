@@ -80,3 +80,43 @@ describe('Beats 列表筛选 - GET /beats', () => {
     expect(res.body.beats.length).toBeLessThanOrEqual(3);
   });
 });
+
+describe('Beats 分页参数边界', () => {
+  let app: ReturnType<typeof createApp>;
+
+  beforeAll(() => { app = createApp(); });
+
+  it('TC-BEATS-BOUNDARY-001 P1 limit=0 回退默认分页', async () => {
+    const res = await request(app).get('/api/beats?limit=0');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.beats)).toBe(true);
+    expect(res.body.beats.length).toBeLessThanOrEqual(12); // 默认 12
+  });
+
+  it('TC-BEATS-BOUNDARY-002 P1 limit 超上限被 clamp 到 100', async () => {
+    const res = await request(app).get('/api/beats?limit=1000');
+    expect(res.status).toBe(200);
+    expect(res.body.beats.length).toBeLessThanOrEqual(100);
+  });
+
+  it('TC-BEATS-BOUNDARY-003 P1 limit 非数字回退默认', async () => {
+    const res = await request(app).get('/api/beats?limit=abc');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.beats)).toBe(true);
+  });
+
+  it('TC-BEATS-BOUNDARY-004 P1 page 超出范围返回空列表', async () => {
+    const res = await request(app).get('/api/beats?page=999');
+    expect(res.status).toBe(200);
+    expect(res.body.beats).toEqual([]);
+  });
+
+  it('TC-BEATS-BOUNDARY-005 P1 page 负数/非数字 clamp 到 1', async () => {
+    const r1 = await request(app).get('/api/beats?page=-5');
+    const r2 = await request(app).get('/api/beats?page=abc');
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+    expect(r1.body.page).toBe(1);
+    expect(r2.body.page).toBe(1);
+  });
+});

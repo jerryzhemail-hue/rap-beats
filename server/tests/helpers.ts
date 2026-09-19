@@ -82,5 +82,15 @@ export async function makeUserBeatmaker(userId: number) {
 /** 清理测试用户（按 username 模糊匹配 test_/adm_/usr_ 前缀） */
 export async function cleanupTestUsers() {
   const db = getDatabaseClient();
-  await db.execute("DELETE FROM users WHERE username REGEXP '^(test|adm|usr)_'");
+  // 先清关联的申请/认证记录，避免外键或唯一约束残留导致后续测试 409
+  await db.execute(
+    "DELETE ba FROM beatmaker_applications ba JOIN users u ON ba.user_id = u.id WHERE u.username REGEXP '^(test|adm|usr|e2e)_'"
+  ).catch(() => {});
+  await db.execute(
+    'DELETE ba FROM beatmaker_applications ba LEFT JOIN users u ON ba.user_id = u.id WHERE u.id IS NULL'
+  ).catch(() => {});
+  await db.execute(
+    "DELETE bp FROM beatmaker_profiles bp JOIN users u ON bp.user_id = u.id WHERE u.username REGEXP '^(test|adm|usr|e2e)_'"
+  ).catch(() => {});
+  await db.execute("DELETE FROM users WHERE username REGEXP '^(test|adm|usr|e2e)_'");
 }
