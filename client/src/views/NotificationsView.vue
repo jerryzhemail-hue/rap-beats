@@ -452,9 +452,21 @@ onUnmounted(() => {
   min-height: 100vh;
   background: var(--bg-primary, #0f0f14);
   color: var(--text-primary, #e8e8ed);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0;
+}
+
+.notifications-page > * {
+  width: 80%;
+  max-width: 1200px;
 }
 
 .page-header {
+  width: 80%;
+  max-width: 1200px;
+  align-self: center;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -516,7 +528,7 @@ onUnmounted(() => {
   display: flex; align-items: center; justify-content: center;
 }
 
-.page-body { max-width: 600px; margin: 0 auto; padding: 0 16px; }
+.page-body { width: 80%; max-width: 1200px; }
 
 .loading { display: flex; justify-content: center; padding: 60px 0; }
 .spinner {

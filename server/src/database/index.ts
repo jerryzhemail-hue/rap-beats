@@ -98,6 +98,37 @@ export async function initDatabase(
   try { await db.execute("ALTER TABLE users ADD COLUMN beatmaker_certified_at DATETIME NULL AFTER is_beatmaker"); } catch (_) { /* ignore */ }
   try { await db.execute("CREATE INDEX idx_users_is_beatmaker ON users(is_beatmaker)"); } catch (_) { /* ignore */ }
 
+  // ─── 昵称 + IP 归属地（个人中心需求 P0） ────────────────────────────────
+  // 已有表升级时幂等：try/catch 包住，每条 ADD COLUMN 单独 catch，确保列已存在时不报错
+  try { await db.execute("ALTER TABLE users ADD COLUMN nickname VARCHAR(50) NULL UNIQUE AFTER username"); } catch (_) { /* ignore */ }
+  try { await db.execute("ALTER TABLE users ADD COLUMN nickname_pinyin VARCHAR(255) NULL AFTER nickname"); } catch (_) { /* ignore */ }
+  try { await db.execute("CREATE INDEX idx_users_nickname_pinyin ON users(nickname_pinyin)"); } catch (_) { /* ignore */ }
+  try { await db.execute("ALTER TABLE users ADD COLUMN register_ip VARCHAR(64) NULL AFTER created_at"); } catch (_) { /* ignore */ }
+  // ─── 个人简介 bio ────────────────────────────────────────────────────────
+  try { await db.execute("ALTER TABLE users ADD COLUMN bio TEXT NULL AFTER nickname_pinyin"); } catch (_) { /* ignore */ }
+  try { await db.execute("ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(64) NULL AFTER register_ip"); } catch (_) { /* ignore */ }
+  // 归属地缓存：JSON 字符串，结构 {country, province, city, isp}
+  try { await db.execute("ALTER TABLE users ADD COLUMN register_region VARCHAR(100) NULL COMMENT '注册 IP 归属地 JSON' AFTER register_ip"); } catch (_) { /* ignore */ }
+  try { await db.execute("ALTER TABLE users ADD COLUMN last_login_region VARCHAR(100) NULL COMMENT '最近登录 IP 归属地 JSON' AFTER last_login_ip"); } catch (_) { /* ignore */ }
+
+  // IP 历史日志表（追踪 IP 与归属地变更）
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS user_ip_logs (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      ip VARCHAR(45) NOT NULL,
+      country VARCHAR(64) NULL,
+      province VARCHAR(64) NULL,
+      city VARCHAR(64) NULL,
+      isp VARCHAR(64) NULL,
+      source ENUM('register','login','action','api') NOT NULL DEFAULT 'login',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_uip_user_time (user_id, created_at),
+      INDEX idx_uip_ip (ip),
+      CONSTRAINT fk_uip_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   // Beatmaker 申请表
   await db.execute(`
     CREATE TABLE IF NOT EXISTS beatmaker_applications (

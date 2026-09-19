@@ -206,6 +206,15 @@ router.post('/forum/posts', postLimiter, requireAuth, async (req: AuthRequest, r
        topicIdsJson, imagesJson]
     );
 
+    // 同步 forum_user_profiles.post_count 计数（个人中心 stats 需要）
+    await db.execute(
+      `INSERT INTO forum_user_profiles (user_id, post_count) VALUES (?, 1)
+       ON DUPLICATE KEY UPDATE post_count = post_count + 1`,
+      [req.user!.id]
+    ).catch((err) => {
+      console.warn('[forum-posts] post_count update failed:', err)
+    });
+
     // Phase 2: 发帖积分奖励
     const availablePoints = await getAvailableReward(req.user!.id, 'post_created', POINT_REWARDS.post_created);
     let pointsEarned = 0;
@@ -266,6 +275,13 @@ router.delete('/forum/posts/:id', requireAuth, async (req: AuthRequest, res) => 
     }
 
     await db.execute('DELETE FROM forum_posts WHERE id = ?', [id]);
+
+    // 同步减少 author 的 post_count（与发帖时的 +1 保持对称）
+    await db.execute(
+      `INSERT INTO forum_user_profiles (user_id, post_count) VALUES (?, 0)
+       ON DUPLICATE KEY UPDATE post_count = GREATEST(0, post_count - 1)`,
+      [post.user_id]
+    );
 
     res.json({ message: '删除成功' });
   } catch (err: any) {

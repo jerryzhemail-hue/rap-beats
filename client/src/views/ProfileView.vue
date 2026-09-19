@@ -1,43 +1,24 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import BeatCard from '@/components/BeatCard.vue'
-import { fetchMyUploads, fetchMyDownloads, updateProfile, updatePassword, uploadAvatar, removeAvatar, updateMyBeat, deleteMyBeat, uploadMyBeatCover } from '@/api/user'
-import { fetchFavorites } from '@/api/favorites'
-import {
-  fetchMyForumPosts,
-  fetchMyForumFavorites,
-  fetchMyForumLikes,
-  fetchMyForumComments,
-  deleteForumPost,
-  fetchSignInStatus,
-  type ForumPost,
-  type ForumMyComment,
-} from '@/api/forum'
-import {
-  defaultGenreCategoryValue,
-  defaultGenreValue,
-  genreCategoryOptions,
-  getGenreCategoryValueByGenre,
-  getGenreChildrenByCategory,
-  normalizeGenreValue
-} from '@/constants/genres'
-import type { Beat } from '@/types'
-import { resolveAvatarUrl, resolveCoverUrl } from '@/utils/assets'
-import { submitFeedback, fetchMyFeedback } from '@/api/feedback'
+import { resolveAvatarUrl } from '@/utils/assets'
+import ProfileForumTab from '@/views/ProfileForumTab.vue'
+import ProfileUploadsTab from '@/views/ProfileUploadsTab.vue'
+import ProfileDownloadsTab from '@/views/ProfileDownloadsTab.vue'
+import ProfileFavoritesTab from '@/views/ProfileFavoritesTab.vue'
+import ProfileFeedbackTab from '@/views/ProfileFeedbackTab.vue'
+import ProfileSettingsTab from '@/views/ProfileSettingsTab.vue'
+import { fetchProfileFull } from '@/api/user'
+import { fetchSignInStatus } from '@/api/forum'
+import { formatDate } from '@/utils/format'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
-const BPM_MIN = 40
-const BPM_MAX = 240
-
 type TabKey = 'uploads' | 'downloads' | 'favorites' | 'forum' | 'settings' | 'feedback'
-type ForumSubKey = 'myposts' | 'mylikes' | 'myfavorites' | 'mycomments' | 'myaudio' | 'myimages'
 
 const activeTab = ref<TabKey>('downloads')
-const activeForumSub = ref<ForumSubKey>('myposts')
 
 watch(() => authStore.isAdmin, (isAdmin) => {
   if (!isAdmin && activeTab.value === 'uploads') {
@@ -45,111 +26,10 @@ watch(() => authStore.isAdmin, (isAdmin) => {
   }
 })
 
-// uploads
-const uploads = ref<Beat[]>([])
-const uploadsTotal = ref(0)
-const uploadsPage = ref(1)
-const uploadsTotalPages = ref(1)
-const uploadsLoading = ref(false)
-const uploadActionSuccess = ref('')
-const uploadActionError = ref('')
-const uploadEditVisible = ref(false)
-const uploadEditLoading = ref(false)
-const uploadEditGenreCategory = ref(defaultGenreCategoryValue)
-const uploadEditCoverFile = ref<File | null>(null)
-const uploadEditCoverPreview = ref('')
-const uploadEditForm = ref({
-  id: 0,
-  title: '',
-  producer: '',
-  bpm: undefined as number | undefined,
-  genre: defaultGenreValue,
-  tags: '',
-  is_free: false
-})
-
-// downloads
-const downloads = ref<any[]>([])
-const downloadsTotal = ref(0)
-const downloadsPage = ref(1)
-const downloadsTotalPages = ref(1)
-const downloadsLoading = ref(false)
-
-// favorites
-const favorites = ref<Beat[]>([])
-const favoritesTotal = ref(0)
-const favoritesPage = ref(1)
-const favoritesTotalPages = ref(1)
-const favoritesLoading = ref(false)
-
-// forum
-const forumMyPosts = ref<ForumPost[]>([])
-const forumMyPostsTotal = ref(0)
-const forumMyPostsPage = ref(1)
-const forumMyPostsTotalPages = ref(1)
-const forumMyPostsLoading = ref(false)
-
-const forumMyLikes = ref<ForumPost[]>([])
-const forumMyLikesTotal = ref(0)
-const forumMyLikesPage = ref(1)
-const forumMyLikesTotalPages = ref(1)
-const forumMyLikesLoading = ref(false)
-
-const forumMyFavorites = ref<ForumPost[]>([])
-const forumMyFavoritesTotal = ref(0)
-const forumMyFavoritesPage = ref(1)
-const forumMyFavoritesTotalPages = ref(1)
-const forumMyFavoritesLoading = ref(false)
-
-const forumMyComments = ref<ForumMyComment[]>([])
-const forumMyCommentsTotal = ref(0)
-const forumMyCommentsPage = ref(1)
-const forumMyCommentsTotalPages = ref(1)
-const forumMyCommentsLoading = ref(false)
-
-const forumMyAudio = ref<ForumPost[]>([])
-const forumMyAudioTotal = ref(0)
-const forumMyAudioPage = ref(1)
-const forumMyAudioTotalPages = ref(1)
-const forumMyAudioLoading = ref(false)
-
-const forumMyImages = ref<{ post_id: number; title: string; image: string; created_at: string }[]>([])
-const forumMyImagesTotal = ref(0)
-const forumMyImagesPage = ref(1)
-const forumMyImagesTotalPages = ref(1)
-const forumMyImagesLoading = ref(false)
-
-const forumDeleteMsg = ref('')
-
-// settings
-const profileUsername = ref('')
-const profileEmail = ref('')
-const profileSuccess = ref('')
-const profileError = ref('')
-const profileLoading = ref(false)
-const avatarFile = ref<File | null>(null)
-const avatarPreviewUrl = ref('')
-const avatarSuccess = ref('')
-const avatarError = ref('')
-const avatarLoading = ref(false)
-
-const oldPassword = ref('')
-const newPassword = ref('')
-const confirmPassword = ref('')
-const passwordSuccess = ref('')
-const passwordError = ref('')
-const passwordLoading = ref(false)
-
-// feedback
-const myFeedback = ref<any[]>([])
-const myFeedbackTotal = ref(0)
-const myFeedbackPage = ref(1)
-const myFeedbackTotalPages = ref(1)
-const myFeedbackLoading = ref(false)
-const feedbackForm = ref({ type: 'bug', title: '', content: '', contact: '' })
-const feedbackSubmitError = ref('')
-const feedbackSubmitSuccess = ref('')
-const feedbackLoading = ref(false)
+// 完整个人资料（头部用）
+const profileFull = ref<Awaited<ReturnType<typeof fetchProfileFull>> | null>(null)
+const copyAccountSuccess = ref('')
+const copyAccountError = ref('')
 
 const user = computed(() => authStore.user)
 
@@ -158,12 +38,9 @@ const avatarLetter = computed(() => {
 })
 
 const avatarSrc = computed(() => {
-  if (avatarPreviewUrl.value) return avatarPreviewUrl.value
   if (user.value?.avatar_url) return resolveAvatarUrl(user.value.avatar_url)
   return ''
 })
-
-const uploadGenreChildOptions = computed(() => getGenreChildrenByCategory(uploadEditGenreCategory.value))
 
 const profileTabs = computed(() => {
   const tabs = [
@@ -179,351 +56,39 @@ const profileTabs = computed(() => {
   return tabs
 })
 
-const forumSubTabs = [
-  { key: 'myposts', label: '发布的帖子' },
-  { key: 'mylikes', label: '点赞' },
-  { key: 'myfavorites', label: '收藏' },
-  { key: 'mycomments', label: '评论' },
-  { key: 'myaudio', label: '音频记录' },
-  { key: 'myimages', label: '图片记录' },
-] as const
 
-function isValidBpmValue(value: number | undefined) {
-  return value !== undefined && Number.isInteger(Number(value)) && Number(value) >= BPM_MIN && Number(value) <= BPM_MAX
-}
 
-function formatDate(dateStr: string) {
-  if (!dateStr) return ''
-  const d = new Date(dateStr)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-function normalizeTags(tags: Beat['tags'] | string | null | undefined) {
-  if (Array.isArray(tags)) return tags.join(', ')
-  if (typeof tags !== 'string') return ''
-
-  const value = tags.trim()
-  if (!value) return ''
-
-  if (value.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(value)
-      if (Array.isArray(parsed)) return parsed.join(', ')
-    } catch {
-      return value
-    }
-  }
-
-  return value
-}
-
-function clearAvatarPreview() {
-  if (avatarPreviewUrl.value) {
-    URL.revokeObjectURL(avatarPreviewUrl.value)
-    avatarPreviewUrl.value = ''
-  }
-}
-
-function clearUploadEditCoverPreview() {
-  if (uploadEditCoverPreview.value.startsWith('blob:')) {
-    URL.revokeObjectURL(uploadEditCoverPreview.value)
-  }
-  uploadEditCoverPreview.value = ''
-}
-
-function setUploadEditCoverPreview(value: string) {
-  clearUploadEditCoverPreview()
-  uploadEditCoverPreview.value = value
-}
-
-async function loadMyFeedback() {
-  myFeedbackLoading.value = true
+async function loadProfileFull() {
   try {
-    const data = await fetchMyFeedback(myFeedbackPage.value)
-    myFeedback.value = data.feedback
-    myFeedbackTotal.value = data.total
-    myFeedbackTotalPages.value = data.totalPages
+    profileFull.value = await fetchProfileFull(undefined)
   } catch (e) {
-    console.error(e)
-  } finally {
-    myFeedbackLoading.value = false
+    console.error('loadProfileFull failed', e)
   }
 }
 
-async function handleSubmitFeedback() {
-  feedbackSubmitError.value = ''
-  feedbackSubmitSuccess.value = ''
-  const { type, title, content, contact } = feedbackForm.value
-  if (!title.trim()) { feedbackSubmitError.value = '请填写标题'; return }
-  if (content.trim().length < 10) { feedbackSubmitError.value = '详细描述至少10字'; return }
-  feedbackLoading.value = true
+async function copyAccount() {
+  copyAccountError.value = ''
+  copyAccountSuccess.value = ''
+  const acct = profileFull.value?.username
+  if (!acct) return
   try {
-    await submitFeedback({ type, title: title.trim(), content, contact })
-    feedbackSubmitSuccess.value = '反馈已提交，感谢你的意见！'
-    feedbackForm.value = { type: 'bug', title: '', content: '', contact: '' }
-    myFeedbackPage.value = 1
-    await loadMyFeedback()
-  } catch (e: any) {
-    feedbackSubmitError.value = e?.error || '提交失败，请重试'
-  } finally {
-    feedbackLoading.value = false
-  }
-}
-
-function handleUploadEditCoverSelect(file: File) {
-  const allowed = ['.jpg', '.jpeg', '.png', '.webp']
-  const ext = '.' + file.name.split('.').pop()?.toLowerCase()
-  if (!allowed.includes(ext)) {
-    uploadActionError.value = '封面仅支持 jpg、png、webp 格式'
-    return
-  }
-
-  uploadEditCoverFile.value = file
-  uploadActionError.value = ''
-  setUploadEditCoverPreview(URL.createObjectURL(file))
-}
-
-function onUploadEditCoverChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (file) handleUploadEditCoverSelect(file)
-}
-
-async function loadUploads() {
-  uploadsLoading.value = true
-  try {
-    const data: any = await fetchMyUploads(uploadsPage.value)
-    uploads.value = data.beats || []
-    uploadsTotal.value = data.total || 0
-    uploadsTotalPages.value = data.totalPages || 1
-  } catch {
-    uploads.value = []
-  } finally {
-    uploadsLoading.value = false
-  }
-}
-
-function openUploadEdit(beat: Beat) {
-  uploadActionSuccess.value = ''
-  uploadActionError.value = ''
-  const normalizedGenre = normalizeGenreValue(beat.genre)
-  uploadEditGenreCategory.value = getGenreCategoryValueByGenre(normalizedGenre)
-  uploadEditCoverFile.value = null
-  setUploadEditCoverPreview(resolveCoverUrl(beat.cover_image))
-  uploadEditForm.value = {
-    id: beat.id,
-    title: beat.title,
-    producer: beat.producer,
-    bpm: beat.bpm || undefined,
-    genre: normalizedGenre,
-    tags: normalizeTags(beat.tags as any),
-    is_free: !!beat.is_free
-  }
-  uploadEditVisible.value = true
-}
-
-function closeUploadEdit() {
-  uploadEditVisible.value = false
-  uploadEditCoverFile.value = null
-  clearUploadEditCoverPreview()
-}
-
-function onUploadEditGenreCategoryChange() {
-  const firstChild = getGenreChildrenByCategory(uploadEditGenreCategory.value)[0]
-  uploadEditForm.value.genre = firstChild?.value || defaultGenreValue
-}
-
-async function saveUploadEdit() {
-  uploadActionSuccess.value = ''
-  uploadActionError.value = ''
-
-  if (!uploadEditForm.value.title.trim() || !uploadEditForm.value.producer.trim() || !uploadEditForm.value.genre.trim()) {
-    uploadActionError.value = '请完整填写标题、制作人和风格'
-    return
-  }
-
-  if (!isValidBpmValue(uploadEditForm.value.bpm)) {
-    uploadActionError.value = `请填写 ${BPM_MIN}-${BPM_MAX} 之间的整数 BPM`
-    return
-  }
-
-  uploadEditLoading.value = true
-  try {
-    let nextCoverImage: string | undefined
-    if (uploadEditCoverFile.value) {
-      const uploadedCover = await uploadMyBeatCover(uploadEditForm.value.id, uploadEditCoverFile.value)
-      nextCoverImage = uploadedCover.stored_value
-    }
-
-    await updateMyBeat(uploadEditForm.value.id, {
-      title: uploadEditForm.value.title.trim(),
-      producer: uploadEditForm.value.producer.trim(),
-      bpm: Number(uploadEditForm.value.bpm),
-      genre: uploadEditForm.value.genre.trim(),
-      tags: uploadEditForm.value.tags.trim(),
-      cover_image: nextCoverImage,
-      is_free: uploadEditForm.value.is_free ? 1 : 0
-    })
-    uploadActionSuccess.value = '伴奏信息已更新'
-    uploadEditVisible.value = false
-    await loadUploads()
-  } catch (err: any) {
-    uploadActionError.value = err.message || '保存失败，请稍后重试'
-  } finally {
-    uploadEditLoading.value = false
-  }
-}
-
-async function removeUploadedBeat(beat: Beat) {
-  uploadActionSuccess.value = ''
-  uploadActionError.value = ''
-
-  if (!window.confirm(`确定删除伴奏“${beat.title}”吗？删除后将无法恢复。`)) {
-    return
-  }
-
-  try {
-    await deleteMyBeat(beat.id)
-    uploadActionSuccess.value = '伴奏已删除'
-
-    if (uploads.value.length === 1 && uploadsPage.value > 1) {
-      uploadsPage.value -= 1
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(acct)
     } else {
-      await loadUploads()
+      // Fallback: 临时 textarea + execCommand
+      const ta = document.createElement('textarea')
+      ta.value = acct
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
     }
-  } catch (err: any) {
-    uploadActionError.value = err.message || '删除失败，请稍后重试'
-  }
-}
-
-async function loadDownloads() {
-  downloadsLoading.value = true
-  try {
-    const data: any = await fetchMyDownloads(downloadsPage.value)
-    downloads.value = data.downloads || []
-    downloadsTotal.value = data.total || 0
-    downloadsTotalPages.value = data.totalPages || 1
-  } catch {
-    downloads.value = []
-  } finally {
-    downloadsLoading.value = false
-  }
-}
-
-async function loadFavorites() {
-  favoritesLoading.value = true
-  try {
-    const data: any = await fetchFavorites(favoritesPage.value)
-    favorites.value = (data.favorites || data.beats || []).map((b: any) => ({ ...b, is_favorited: true }))
-    favoritesTotal.value = data.total || 0
-    favoritesTotalPages.value = data.totalPages || 1
-  } catch {
-    favorites.value = []
-  } finally {
-    favoritesLoading.value = false
-  }
-}
-
-async function loadForumMyPosts() {
-  forumMyPostsLoading.value = true
-  try {
-    const data = await fetchMyForumPosts({ page: forumMyPostsPage.value })
-    forumMyPosts.value = data.posts
-    forumMyPostsTotal.value = data.total
-    forumMyPostsTotalPages.value = data.page_size > 0 ? Math.ceil(data.total / data.page_size) : 1
-  } catch {
-    forumMyPosts.value = []
-  } finally {
-    forumMyPostsLoading.value = false
-  }
-}
-
-async function loadForumMyLikes() {
-  forumMyLikesLoading.value = true
-  try {
-    const data = await fetchMyForumLikes({ page: forumMyLikesPage.value })
-    forumMyLikes.value = data.posts
-    forumMyLikesTotal.value = data.total
-    forumMyLikesTotalPages.value = data.page_size > 0 ? Math.ceil(data.total / data.page_size) : 1
-  } catch {
-    forumMyLikes.value = []
-  } finally {
-    forumMyLikesLoading.value = false
-  }
-}
-
-async function loadForumMyFavorites() {
-  forumMyFavoritesLoading.value = true
-  try {
-    const data = await fetchMyForumFavorites({ page: forumMyFavoritesPage.value })
-    forumMyFavorites.value = data.posts
-    forumMyFavoritesTotal.value = data.total
-    forumMyFavoritesTotalPages.value = data.page_size > 0 ? Math.ceil(data.total / data.page_size) : 1
-  } catch {
-    forumMyFavorites.value = []
-  } finally {
-    forumMyFavoritesLoading.value = false
-  }
-}
-
-async function loadForumMyComments() {
-  forumMyCommentsLoading.value = true
-  try {
-    const data = await fetchMyForumComments({ page: forumMyCommentsPage.value })
-    forumMyComments.value = data.comments
-    forumMyCommentsTotal.value = data.total
-    forumMyCommentsTotalPages.value = data.page_size > 0 ? Math.ceil(data.total / data.page_size) : 1
-  } catch {
-    forumMyComments.value = []
-  } finally {
-    forumMyCommentsLoading.value = false
-  }
-}
-
-async function loadForumMyAudio() {
-  forumMyAudioLoading.value = true
-  try {
-    const data = await fetchMyForumPosts({ page: forumMyAudioPage.value })
-    forumMyAudio.value = (data.posts || []).filter((p: ForumPost) => !!p.music_file || !!p.music_title)
-    forumMyAudioTotal.value = data.total
-    forumMyAudioTotalPages.value = data.page_size > 0 ? Math.ceil(data.total / data.page_size) : 1
-  } catch {
-    forumMyAudio.value = []
-  } finally {
-    forumMyAudioLoading.value = false
-  }
-}
-
-async function loadForumMyImages() {
-  forumMyImagesLoading.value = true
-  try {
-    const data = await fetchMyForumPosts({ page: forumMyImagesPage.value })
-    const images: { post_id: number; title: string; image: string; created_at: string }[] = []
-    for (const post of (data.posts || [])) {
-      const postImages = Array.isArray(post.images) ? post.images : []
-      for (const img of postImages.slice(0, 6)) {
-        images.push({ post_id: post.id, title: post.title, image: img, created_at: post.created_at })
-      }
-    }
-    forumMyImages.value = images
-    forumMyImagesTotal.value = images.length
-    forumMyImagesTotalPages.value = 1
-  } catch {
-    forumMyImages.value = []
-  } finally {
-    forumMyImagesLoading.value = false
-  }
-}
-
-async function deleteForumPostById(postId: number) {
-  if (!window.confirm('确定删除该帖子吗？')) return
-  forumDeleteMsg.value = ''
-  try {
-    await deleteForumPost(postId)
-    forumDeleteMsg.value = '帖子已删除'
-    await loadForumMyPosts()
-  } catch (err: any) {
-    forumDeleteMsg.value = err.message || '删除失败'
+    copyAccountSuccess.value = '已复制 RAP BEATS 账号'
+    setTimeout(() => { copyAccountSuccess.value = '' }, 1500)
+  } catch (e) {
+    copyAccountError.value = '复制失败，请手动选中'
   }
 }
 
@@ -531,182 +96,17 @@ function switchTab(tab: TabKey) {
   activeTab.value = tab
 }
 
-watch(activeTab, (tab) => {
-  if (tab === 'uploads' && authStore.isAdmin && uploads.value.length === 0) loadUploads()
-  if (tab === 'downloads' && downloads.value.length === 0) loadDownloads()
-  if (tab === 'favorites' && favorites.value.length === 0) loadFavorites()
-  if (tab === 'forum' && forumMyPosts.value.length === 0) loadForumMyPosts()
-  if (tab === 'feedback' && myFeedback.value.length === 0) loadMyFeedback()
-  if (tab === 'settings') {
-    profileUsername.value = user.value?.username || ''
-    profileEmail.value = user.value?.email || ''
-    avatarSuccess.value = ''
-    avatarError.value = ''
-  }
-})
-
-watch(activeForumSub, (sub) => {
-  if (sub === 'myposts' && forumMyPosts.value.length === 0) loadForumMyPosts()
-  if (sub === 'mylikes' && forumMyLikes.value.length === 0) loadForumMyLikes()
-  if (sub === 'myfavorites' && forumMyFavorites.value.length === 0) loadForumMyFavorites()
-  if (sub === 'mycomments' && forumMyComments.value.length === 0) loadForumMyComments()
-  if (sub === 'myaudio' && forumMyAudio.value.length === 0) loadForumMyAudio()
-  if (sub === 'myimages' && forumMyImages.value.length === 0) loadForumMyImages()
-})
-
-watch(forumMyPostsPage, loadForumMyPosts)
-watch(forumMyLikesPage, loadForumMyLikes)
-watch(forumMyFavoritesPage, loadForumMyFavorites)
-watch(forumMyCommentsPage, loadForumMyComments)
-watch(forumMyAudioPage, loadForumMyAudio)
-watch(uploadsPage, loadUploads)
-watch(downloadsPage, loadDownloads)
-watch(favoritesPage, loadFavorites)
-
-onMounted(() => {
+onMounted(async () => {
   const tabParam = route.query.tab as string
   if (tabParam && ['uploads', 'downloads', 'favorites', 'forum', 'settings', 'feedback'].includes(tabParam)) {
     activeTab.value = tabParam as TabKey
   }
-  if (authStore.isAdmin) loadUploads()
   loadSignInStatus()
-  profileUsername.value = user.value?.username || ''
-  profileEmail.value = user.value?.email || ''
+  await loadProfileFull()
 })
 
-onBeforeUnmount(() => {
-  clearAvatarPreview()
-  clearUploadEditCoverPreview()
-})
-
-async function saveProfile() {
-  profileError.value = ''
-  profileSuccess.value = ''
-  if (!profileUsername.value.trim() || !profileEmail.value.trim()) {
-    profileError.value = '用户名和邮箱不能为空'
-    return
-  }
-  profileLoading.value = true
-  try {
-    const data: any = await updateProfile({ username: profileUsername.value.trim(), email: profileEmail.value.trim() })
-    profileSuccess.value = data.message || '更新成功'
-    if (data.user && authStore.user) {
-      authStore.user.username = data.user.username
-      authStore.user.email = data.user.email
-    }
-  } catch (err: any) {
-    profileError.value = err.message || '更新失败'
-  } finally {
-    profileLoading.value = false
-  }
-}
-
-function handleAvatarChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0] || null
-
-  avatarSuccess.value = ''
-  avatarError.value = ''
-  avatarFile.value = null
-  clearAvatarPreview()
-
-  if (!file) return
-
-  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp']
-  if (!allowedTypes.includes(file.type)) {
-    avatarError.value = '头像仅支持 JPG、PNG、WEBP 格式'
-    input.value = ''
-    return
-  }
-
-  if (file.size > 5 * 1024 * 1024) {
-    avatarError.value = '头像大小不能超过 5MB'
-    input.value = ''
-    return
-  }
-
-  avatarFile.value = file
-  avatarPreviewUrl.value = URL.createObjectURL(file)
-}
-
-async function saveAvatar() {
-  if (!avatarFile.value) {
-    avatarError.value = '请先选择头像文件'
-    return
-  }
-
-  avatarLoading.value = true
-  avatarSuccess.value = ''
-  avatarError.value = ''
-
-  try {
-    const data = await uploadAvatar(avatarFile.value)
-    avatarSuccess.value = data.message || '头像上传成功'
-    if (authStore.user) {
-      authStore.user.avatar_url = data.user.avatar_url || null
-    }
-    avatarFile.value = null
-    clearAvatarPreview()
-    await authStore.checkAuth()
-  } catch (err: any) {
-    avatarError.value = err.message || '头像上传失败'
-  } finally {
-    avatarLoading.value = false
-  }
-}
-
-async function resetAvatar() {
-  avatarLoading.value = true
-  avatarSuccess.value = ''
-  avatarError.value = ''
-
-  try {
-    const data = await removeAvatar()
-    if (authStore.user) {
-      authStore.user.avatar_url = data.user.avatar_url || null
-    }
-    avatarFile.value = null
-    clearAvatarPreview()
-    avatarSuccess.value = data.message || '已恢复默认头像'
-    await authStore.checkAuth()
-  } catch (err: any) {
-    avatarError.value = err.message || '恢复默认头像失败'
-  } finally {
-    avatarLoading.value = false
-  }
-}
-
-async function savePassword() {
-  passwordError.value = ''
-  passwordSuccess.value = ''
-  if (!oldPassword.value || !newPassword.value || !confirmPassword.value) {
-    passwordError.value = '请填写所有密码字段'
-    return
-  }
-  if (newPassword.value !== confirmPassword.value) {
-    passwordError.value = '两次新密码不一致'
-    return
-  }
-  if (newPassword.value.length < 6) {
-    passwordError.value = '新密码至少6位'
-    return
-  }
-  passwordLoading.value = true
-  try {
-    const data: any = await updatePassword({ oldPassword: oldPassword.value, newPassword: newPassword.value })
-    passwordSuccess.value = data.message || '密码修改成功'
-    oldPassword.value = ''
-    newPassword.value = ''
-    confirmPassword.value = ''
-  } catch (err: any) {
-    passwordError.value = err.message || '修改失败'
-  } finally {
-    passwordLoading.value = false
-  }
-}
-
-// 积分
 const signInStatus = ref({ signed_today: false, consecutive_days: 0, total_points: 0 })
+
 async function loadSignInStatus() {
   if (!authStore.isAuthenticated) return
   try {
@@ -714,7 +114,6 @@ async function loadSignInStatus() {
   } catch {}
 }
 
-const defaultCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200"><rect fill="#252540" width="200" height="200"/><text fill="#7c3aed" font-size="60" x="50%" y="55%" text-anchor="middle" dominant-baseline="middle">&#9835;</text></svg>')
 </script>
 
 <template>
@@ -726,7 +125,14 @@ const defaultCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="htt
         <span v-else>{{ avatarLetter }}</span>
       </div>
       <div class="profile-info">
-        <h1 class="profile-name">{{ user?.username }}</h1>
+        <h1 class="profile-name">{{ profileFull?.nickname || user?.username }}</h1>
+        <div class="profile-account-row">
+          <span class="account-tag">RAP BEATS 账号</span>
+          <span class="account-id">{{ user?.username }}</span>
+          <button class="copy-btn" type="button" @click="copyAccount">复制</button>
+          <span v-if="copyAccountSuccess" class="copy-tip copy-tip-ok">{{ copyAccountSuccess }}</span>
+          <span v-if="copyAccountError" class="copy-tip copy-tip-err">{{ copyAccountError }}</span>
+        </div>
         <p class="profile-email">{{ user?.email }}</p>
         <div class="profile-meta">
           <span class="role-badge" :class="user?.role === 'admin' ? 'role-admin' : 'role-user'">
@@ -739,7 +145,32 @@ const defaultCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="htt
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>
             {{ signInStatus.total_points }} 积分
           </span>
-          <span class="join-date">注册于 {{ formatDate((user as any)?.created_at || '') }}</span>
+          <span class="join-date">注册于 {{ formatDate(profileFull?.created_at || '') }}</span>
+        </div>
+
+        <!-- 个人简介 -->
+        <div v-if="profileFull?.bio" class="profile-bio">
+          {{ profileFull.bio }}
+        </div>
+
+        <!-- 4 个 stats 数字 -->
+        <div v-if="profileFull?.stats" class="profile-stats">
+          <button class="stat-item" type="button" @click="router.push(`/u/${user?.id}/following`)" title="点击查看关注列表">
+            <span class="stat-num">{{ profileFull.stats.following_count }}</span>
+            <span class="stat-label">关注</span>
+          </button>
+          <button class="stat-item" type="button" @click="router.push(`/u/${user?.id}/followers`)" title="点击查看粉丝列表">
+            <span class="stat-num">{{ profileFull.stats.follower_count }}</span>
+            <span class="stat-label">粉丝</span>
+          </button>
+          <button class="stat-item" type="button" disabled title="收到的总赞数">
+            <span class="stat-num">{{ profileFull.stats.likes_received }}</span>
+            <span class="stat-label">获赞</span>
+          </button>
+          <button class="stat-item" type="button" disabled title="收藏总数">
+            <span class="stat-num">{{ profileFull.stats.favorites_count }}</span>
+            <span class="stat-label">收藏</span>
+          </button>
         </div>
       </div>
     </div>
@@ -758,518 +189,13 @@ const defaultCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="htt
     </div>
 
     <!-- 我的上传 -->
-    <div v-if="activeTab === 'uploads'" class="tab-content">
-      <div v-if="uploadActionSuccess" class="success-msg uploads-msg">{{ uploadActionSuccess }}</div>
-      <div v-if="uploadActionError" class="error-msg uploads-msg">{{ uploadActionError }}</div>
-      <div v-if="uploadsLoading" class="loading-state">加载中...</div>
-      <div v-else-if="uploads.length === 0" class="empty-state">
-        <span class="empty-icon">&#9835;</span>
-        <p>还没有上传伴奏</p>
-      </div>
-      <div v-else>
-        <div class="beats-grid uploads-manage-grid">
-          <div v-for="beat in uploads" :key="beat.id" class="upload-manage-item">
-            <BeatCard :beat="beat" />
-            <div class="upload-manage-actions">
-              <button type="button" class="manage-btn" @click="openUploadEdit(beat)">编辑信息</button>
-              <button type="button" class="manage-btn manage-btn-danger" @click="removeUploadedBeat(beat)">删除伴奏</button>
-            </div>
-          </div>
-        </div>
-        <div v-if="uploadsTotalPages > 1" class="pagination">
-          <button class="page-btn" :disabled="uploadsPage <= 1" @click="uploadsPage--">上一页</button>
-          <span class="page-info">{{ uploadsPage }} / {{ uploadsTotalPages }}</span>
-          <button class="page-btn" :disabled="uploadsPage >= uploadsTotalPages" @click="uploadsPage++">下一页</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 下载记录 -->
-    <div v-if="activeTab === 'downloads'" class="tab-content">
-      <div v-if="downloadsLoading" class="loading-state">加载中...</div>
-      <div v-else-if="downloads.length === 0" class="empty-state">
-        <span class="empty-icon">&#8595;</span>
-        <p>还没有下载记录</p>
-      </div>
-      <div v-else>
-        <div class="download-list">
-          <div
-            v-for="item in downloads"
-            :key="item.id"
-            class="download-item"
-            @click="router.push(`/beats/${item.beat_id || item.id}`)"
-          >
-            <img
-              class="dl-cover"
-              :src="resolveCoverUrl(item.cover_image, defaultCover)"
-              :alt="item.title"
-            />
-            <div class="dl-info">
-              <p class="dl-title">{{ item.title }}</p>
-              <p class="dl-producer">{{ item.producer }}</p>
-            </div>
-            <span class="dl-time">{{ formatDate(item.downloaded_at) }}</span>
-          </div>
-        </div>
-        <div v-if="downloadsTotalPages > 1" class="pagination">
-          <button class="page-btn" :disabled="downloadsPage <= 1" @click="downloadsPage--">上一页</button>
-          <span class="page-info">{{ downloadsPage }} / {{ downloadsTotalPages }}</span>
-          <button class="page-btn" :disabled="downloadsPage >= downloadsTotalPages" @click="downloadsPage++">下一页</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 我的收藏 -->
-    <div v-if="activeTab === 'favorites'" class="tab-content">
-      <div v-if="favoritesLoading" class="loading-state">加载中...</div>
-      <div v-else-if="favorites.length === 0" class="empty-state">
-        <span class="empty-icon">&#10084;</span>
-        <p>还没有收藏伴奏</p>
-      </div>
-      <div v-else>
-        <div class="beats-grid">
-          <BeatCard v-for="beat in favorites" :key="beat.id" :beat="beat" />
-        </div>
-        <div v-if="favoritesTotalPages > 1" class="pagination">
-          <button class="page-btn" :disabled="favoritesPage <= 1" @click="favoritesPage--">上一页</button>
-          <span class="page-info">{{ favoritesPage }} / {{ favoritesTotalPages }}</span>
-          <button class="page-btn" :disabled="favoritesPage >= favoritesTotalPages" @click="favoritesPage++">下一页</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 我的论坛 -->
-    <div v-if="activeTab === 'forum'" class="tab-content">
-      <div class="forum-layout">
-        <!-- 子 Tab 栏（纵向） -->
-        <div class="forum-sub-tabs">
-          <button
-            v-for="sub in forumSubTabs"
-            :key="sub.key"
-            class="forum-sub-tab"
-            :class="{ active: activeForumSub === sub.key }"
-            @click="activeForumSub = sub.key as ForumSubKey"
-          >
-            {{ sub.label }}
-          </button>
-        </div>
-
-        <!-- 内容区 -->
-        <div class="forum-sub-content">
-          <div v-if="forumDeleteMsg" class="success-msg forum-action-msg" :class="{ 'error-msg': forumDeleteMsg.includes('失败') }">
-            {{ forumDeleteMsg }}
-          </div>
-
-          <!-- 发布的帖子 -->
-          <div v-if="activeForumSub === 'myposts'">
-        <div v-if="forumMyPostsLoading" class="loading-state">加载中...</div>
-        <div v-else-if="forumMyPosts.length === 0" class="empty-state">
-          <span class="empty-icon">&#128221;</span>
-          <p>还没有发布过帖子</p>
-          <button class="btn btn-primary" @click="router.push('/forum/new')">发布帖子</button>
-        </div>
-        <div v-else>
-          <div class="forum-post-list">
-            <div v-for="post in forumMyPosts" :key="post.id" class="forum-post-item" @click="router.push(`/forum/post/${post.id}`)">
-              <div class="forum-post-left">
-                <span v-if="post.is_pinned" class="pin-badge">置顶</span>
-                <span v-if="post.is_essence" class="essence-badge">精</span>
-                <h3 class="forum-post-title">{{ post.title }}</h3>
-                <p class="forum-post-preview">{{ post.content_preview }}</p>
-                <div class="forum-post-meta">
-                  <span class="forum-post-cat">{{ post.category_name }}</span>
-                  <span class="forum-post-stat">&#10084; {{ post.like_count }}</span>
-                  <span class="forum-post-stat">&#128172; {{ post.comment_count }}</span>
-                  <span class="forum-post-stat">&#128065; {{ post.view_count }}</span>
-                  <span class="forum-post-time">{{ post.time_ago }}</span>
-                </div>
-              </div>
-              <div v-if="post.cover_image" class="forum-post-thumb">
-                <img :src="resolveCoverUrl(post.cover_image)" :alt="post.title" />
-              </div>
-              <button
-                class="forum-post-delete"
-                title="删除帖子"
-                @click.stop="deleteForumPostById(post.id)"
-              >&#10005;</button>
-            </div>
-          </div>
-          <div v-if="forumMyPostsTotalPages > 1" class="pagination">
-            <button class="page-btn" :disabled="forumMyPostsPage <= 1" @click="forumMyPostsPage--">上一页</button>
-            <span class="page-info">{{ forumMyPostsPage }} / {{ forumMyPostsTotalPages }}</span>
-            <button class="page-btn" :disabled="forumMyPostsPage >= forumMyPostsTotalPages" @click="forumMyPostsPage++">下一页</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 点赞 -->
-      <div class="forum-sub-content" v-if="activeForumSub === 'mylikes'">
-        <div v-if="forumMyLikesLoading" class="loading-state">加载中...</div>
-        <div v-else-if="forumMyLikes.length === 0" class="empty-state">
-          <span class="empty-icon">&#10084;</span>
-          <p>还没有点赞过帖子</p>
-        </div>
-        <div v-else>
-          <div class="forum-post-list">
-            <div v-for="post in forumMyLikes" :key="post.id" class="forum-post-item" @click="router.push(`/forum/post/${post.id}`)">
-              <div class="forum-post-left">
-                <span v-if="post.is_pinned" class="pin-badge">置顶</span>
-                <span v-if="post.is_essence" class="essence-badge">精</span>
-                <h3 class="forum-post-title">{{ post.title }}</h3>
-                <p class="forum-post-preview">{{ post.content_preview }}</p>
-                <div class="forum-post-meta">
-                  <span class="forum-post-cat">{{ post.category_name }}</span>
-                  <span class="forum-post-author">&#64;{{ post.author_username }}</span>
-                  <span class="forum-post-time">{{ post.time_ago }}</span>
-                </div>
-              </div>
-              <div v-if="post.cover_image" class="forum-post-thumb">
-                <img :src="resolveCoverUrl(post.cover_image)" :alt="post.title" />
-              </div>
-            </div>
-          </div>
-          <div v-if="forumMyLikesTotalPages > 1" class="pagination">
-            <button class="page-btn" :disabled="forumMyLikesPage <= 1" @click="forumMyLikesPage--">上一页</button>
-            <span class="page-info">{{ forumMyLikesPage }} / {{ forumMyLikesTotalPages }}</span>
-            <button class="page-btn" :disabled="forumMyLikesPage >= forumMyLikesTotalPages" @click="forumMyLikesPage++">下一页</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 收藏 -->
-      <div class="forum-sub-content" v-if="activeForumSub === 'myfavorites'">
-        <div v-if="forumMyFavoritesLoading" class="loading-state">加载中...</div>
-        <div v-else-if="forumMyFavorites.length === 0" class="empty-state">
-          <span class="empty-icon">&#9733;</span>
-          <p>还没有收藏帖子</p>
-        </div>
-        <div v-else>
-          <div class="forum-post-list">
-            <div v-for="post in forumMyFavorites" :key="post.id" class="forum-post-item" @click="router.push(`/forum/post/${post.id}`)">
-              <div class="forum-post-left">
-                <span v-if="post.is_pinned" class="pin-badge">置顶</span>
-                <span v-if="post.is_essence" class="essence-badge">精</span>
-                <h3 class="forum-post-title">{{ post.title }}</h3>
-                <p class="forum-post-preview">{{ post.content_preview }}</p>
-                <div class="forum-post-meta">
-                  <span class="forum-post-cat">{{ post.category_name }}</span>
-                  <span class="forum-post-author">&#64;{{ post.author_username }}</span>
-                  <span class="forum-post-stat">&#10084; {{ post.like_count }}</span>
-                  <span class="forum-post-stat">&#128172; {{ post.comment_count }}</span>
-                  <span class="forum-post-time">{{ post.time_ago }}</span>
-                </div>
-              </div>
-              <div v-if="post.cover_image" class="forum-post-thumb">
-                <img :src="resolveCoverUrl(post.cover_image)" :alt="post.title" />
-              </div>
-            </div>
-          </div>
-          <div v-if="forumMyFavoritesTotalPages > 1" class="pagination">
-            <button class="page-btn" :disabled="forumMyFavoritesPage <= 1" @click="forumMyFavoritesPage--">上一页</button>
-            <span class="page-info">{{ forumMyFavoritesPage }} / {{ forumMyFavoritesTotalPages }}</span>
-            <button class="page-btn" :disabled="forumMyFavoritesPage >= forumMyFavoritesTotalPages" @click="forumMyFavoritesPage++">下一页</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 评论 -->
-      <div class="forum-sub-content" v-if="activeForumSub === 'mycomments'">
-        <div v-if="forumMyCommentsLoading" class="loading-state">加载中...</div>
-        <div v-else-if="forumMyComments.length === 0" class="empty-state">
-          <span class="empty-icon">&#128172;</span>
-          <p>还没有评论过帖子</p>
-        </div>
-        <div v-else>
-          <div class="forum-comment-list">
-            <div v-for="comment in forumMyComments" :key="comment.id" class="forum-comment-item" @click="router.push(`/forum/post/${comment.post_id}`)">
-              <div class="forum-comment-post-title">
-                回复了帖子：{{ comment.post_title }}
-              </div>
-              <p class="forum-comment-content">{{ comment.content }}</p>
-              <div class="forum-post-meta">
-                <span class="forum-post-stat">&#10084; {{ comment.like_count }}</span>
-                <span class="forum-post-time">{{ comment.time_ago }}</span>
-              </div>
-            </div>
-          </div>
-          <div v-if="forumMyCommentsTotalPages > 1" class="pagination">
-            <button class="page-btn" :disabled="forumMyCommentsPage <= 1" @click="forumMyCommentsPage--">上一页</button>
-            <span class="page-info">{{ forumMyCommentsPage }} / {{ forumMyCommentsTotalPages }}</span>
-            <button class="page-btn" :disabled="forumMyCommentsPage >= forumMyCommentsTotalPages" @click="forumMyCommentsPage++">下一页</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 音频记录 -->
-      <div class="forum-sub-content" v-if="activeForumSub === 'myaudio'">
-        <div v-if="forumMyAudioLoading" class="loading-state">加载中...</div>
-        <div v-else-if="forumMyAudio.length === 0" class="empty-state">
-          <span class="empty-icon">&#127925;</span>
-          <p>还没有发布过音频</p>
-          <button class="btn btn-primary" @click="router.push('/forum/new')">发布音频</button>
-        </div>
-        <div v-else>
-          <div class="beats-grid">
-            <div v-for="post in forumMyAudio" :key="post.id" class="audio-record-item">
-              <div class="audio-record-cover" @click="router.push(`/forum/post/${post.id}`)">
-                <img v-if="post.music_cover_image || post.cover_image" :src="resolveCoverUrl(post.music_cover_image || post.cover_image)" :alt="post.music_title || post.title" />
-                <div v-else class="audio-record-placeholder">&#127925;</div>
-                <div class="audio-play-overlay">&#9658;</div>
-              </div>
-              <div class="audio-record-info">
-                <p class="audio-record-title">{{ post.music_title || post.title }}</p>
-                <p v-if="post.music_artist" class="audio-record-artist">{{ post.music_artist }}</p>
-                <div class="audio-record-meta">
-                  <span v-if="post.music_bpm">{{ post.music_bpm }} BPM</span>
-                  <span v-if="post.music_genre">{{ post.music_genre }}</span>
-                  <span class="forum-post-time">{{ post.time_ago }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-if="forumMyAudioTotalPages > 1" class="pagination">
-            <button class="page-btn" :disabled="forumMyAudioPage <= 1" @click="forumMyAudioPage--">上一页</button>
-            <span class="page-info">{{ forumMyAudioPage }} / {{ forumMyAudioTotalPages }}</span>
-            <button class="page-btn" :disabled="forumMyAudioPage >= forumMyAudioTotalPages" @click="forumMyAudioPage++">下一页</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 图片记录 -->
-      <div class="forum-sub-content" v-if="activeForumSub === 'myimages'">
-        <div v-if="forumMyImagesLoading" class="loading-state">加载中...</div>
-        <div v-else-if="forumMyImages.length === 0" class="empty-state">
-          <span class="empty-icon">&#128247;</span>
-          <p>还没有发布过图片</p>
-          <button class="btn btn-primary" @click="router.push('/forum/new')">发布图片</button>
-        </div>
-        <div v-else>
-          <div class="forum-images-grid">
-            <div v-for="(img, idx) in forumMyImages" :key="idx" class="forum-image-item">
-              <img :src="img.image" :alt="img.title" @click="router.push(`/forum/post/${img.post_id}`)" />
-            </div>
-          </div>
-        </div>
-        </div>
-        </div>
-      </div>
-    </div>
-
+    <ProfileUploadsTab v-if="activeTab === 'uploads'" />
+    <ProfileDownloadsTab v-if="activeTab === 'downloads'" />
+    <ProfileFavoritesTab v-if="activeTab === 'favorites'" />
+    <ProfileForumTab v-if="activeTab === 'forum'" />
     <!-- 个人设置 -->
-    <div v-if="activeTab === 'settings'" class="tab-content">
-      <div class="settings-section">
-        <h2 class="settings-title">自定义头像</h2>
-        <div class="avatar-settings">
-          <div class="avatar-circle avatar-circle-large">
-            <img v-if="avatarSrc" :src="avatarSrc" :alt="`${user?.username || '用户'}头像`" class="avatar-image" />
-            <span v-else>{{ avatarLetter }}</span>
-          </div>
-          <div class="avatar-actions">
-            <div v-if="avatarSuccess" class="success-msg">{{ avatarSuccess }}</div>
-            <div v-if="avatarError" class="error-msg">{{ avatarError }}</div>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              class="avatar-input"
-              @change="handleAvatarChange"
-            />
-            <p class="avatar-hint">支持 JPG、PNG、WEBP，大小不超过 5MB</p>
-            <div class="avatar-button-group">
-              <button type="button" class="btn btn-primary save-btn" :disabled="avatarLoading" @click="saveAvatar">
-                <span v-if="avatarLoading" class="spinner"></span>
-                <span v-else>上传头像</span>
-              </button>
-              <button
-                v-if="user?.avatar_url || avatarPreviewUrl"
-                type="button"
-                class="btn avatar-reset-btn"
-                :disabled="avatarLoading"
-                @click="resetAvatar"
-              >
-                恢复默认头像
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <h2 class="settings-title">修改个人信息</h2>
-        <div v-if="profileSuccess" class="success-msg">{{ profileSuccess }}</div>
-        <div v-if="profileError" class="error-msg">{{ profileError }}</div>
-        <form class="settings-form" @submit.prevent="saveProfile">
-          <div class="form-group">
-            <label class="form-label">用户名</label>
-            <input v-model="profileUsername" type="text" class="form-input" placeholder="3-20个字符" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">邮箱</label>
-            <input v-model="profileEmail" type="email" class="form-input" placeholder="输入邮箱" />
-          </div>
-          <button type="submit" class="btn btn-primary save-btn" :disabled="profileLoading">
-            <span v-if="profileLoading" class="spinner"></span>
-            <span v-else>保存修改</span>
-          </button>
-        </form>
-      </div>
-
-      <div class="settings-section">
-        <h2 class="settings-title">修改密码</h2>
-        <div v-if="passwordSuccess" class="success-msg">{{ passwordSuccess }}</div>
-        <div v-if="passwordError" class="error-msg">{{ passwordError }}</div>
-        <form class="settings-form" @submit.prevent="savePassword">
-          <div class="form-group">
-            <label class="form-label">旧密码</label>
-            <input v-model="oldPassword" type="password" class="form-input" placeholder="输入当前密码" autocomplete="current-password" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">新密码</label>
-            <input v-model="newPassword" type="password" class="form-input" placeholder="至少6位" autocomplete="new-password" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">确认新密码</label>
-            <input v-model="confirmPassword" type="password" class="form-input" placeholder="再次输入新密码" autocomplete="new-password" />
-          </div>
-          <button type="submit" class="btn btn-primary save-btn" :disabled="passwordLoading">
-            <span v-if="passwordLoading" class="spinner"></span>
-            <span v-else>修改密码</span>
-          </button>
-        </form>
-      </div>
-    </div>
-
-    <!-- 意见反馈 -->
-    <div v-if="activeTab === 'feedback'" class="tab-content">
-      <div class="feedback-section">
-        <h2 class="section-title">提交意见反馈</h2>
-        <form class="feedback-form" @submit.prevent="handleSubmitFeedback">
-          <div class="form-group">
-            <label class="form-label">反馈类型 <span class="required">*</span></label>
-            <select v-model="feedbackForm.type" class="form-select">
-              <option value="bug">🐛 Bug 问题</option>
-              <option value="suggestion">💡 功能建议</option>
-              <option value="other">📝 其他</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">标题 <span class="required">*</span></label>
-            <input v-model="feedbackForm.title" type="text" class="form-input" placeholder="简要描述问题或建议（最多50字）" maxlength="50" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">详细描述 <span class="required">*</span></label>
-            <textarea v-model="feedbackForm.content" class="form-textarea" placeholder="请详细描述你遇到的问题或你的建议（至少10字，最多1000字）" rows="6" maxlength="1000"></textarea>
-            <div class="char-count">{{ feedbackForm.content.length }} / 1000</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">联系方式（选填）</label>
-            <input v-model="feedbackForm.contact" type="text" class="form-input" placeholder="微信 / 邮箱，方便我们联系你（选填）" maxlength="100" />
-          </div>
-          <div v-if="feedbackSubmitError" class="error-message">{{ feedbackSubmitError }}</div>
-          <div v-if="feedbackSubmitSuccess" class="success-message">{{ feedbackSubmitSuccess }}</div>
-          <button type="submit" class="btn btn-primary" :disabled="feedbackLoading">
-            <span v-if="feedbackLoading" class="spinner"></span>
-            <span v-else>提交反馈</span>
-          </button>
-        </form>
-
-        <div class="my-feedback-list">
-          <h3 class="section-title" style="margin-top: 40px;">我的反馈记录</h3>
-          <div v-if="myFeedbackLoading" class="loading-state">加载中...</div>
-          <div v-else-if="myFeedback.length === 0" class="empty-state">暂无反馈记录</div>
-          <div v-else class="feedback-items">
-            <div v-for="item in myFeedback" :key="item.id" class="feedback-card">
-              <div class="feedback-card-header">
-                <span class="feedback-type-badge" :class="item.type">{{ item.type === 'bug' ? 'Bug问题' : item.type === 'suggestion' ? '功能建议' : '其他' }}</span>
-                <span class="feedback-status-badge" :class="item.status">{{ item.status === 'pending' ? '待处理' : item.status === 'replied' ? '已回复' : '已关闭' }}</span>
-              </div>
-              <div class="feedback-card-title">{{ item.title }}</div>
-              <div class="feedback-card-content">{{ item.content }}</div>
-              <div v-if="item.reply" class="feedback-reply">
-                <div class="feedback-reply-label">管理员回复：</div>
-                <div class="feedback-reply-content">{{ item.reply }}</div>
-              </div>
-              <div class="feedback-card-time">{{ formatDate(item.created_at) }}</div>
-            </div>
-          </div>
-          <div v-if="myFeedbackTotalPages > 1" class="pagination">
-            <button class="page-btn" :disabled="myFeedbackPage === 1" @click="myFeedbackPage--; loadMyFeedback()">上一页</button>
-            <span class="page-info">{{ myFeedbackPage }} / {{ myFeedbackTotalPages }}</span>
-            <button class="page-btn" :disabled="myFeedbackPage === myFeedbackTotalPages" @click="myFeedbackPage++; loadMyFeedback()">下一页</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <Teleport to="body">
-      <div v-if="uploadEditVisible" class="upload-edit-modal" @click.self="closeUploadEdit">
-        <div class="upload-edit-card">
-          <h3 class="upload-edit-title">编辑伴奏信息</h3>
-          <div class="upload-edit-form">
-            <div class="form-group">
-              <label class="form-label">伴奏封面</label>
-              <div class="upload-cover-panel">
-                <div v-if="uploadEditCoverPreview" class="upload-cover-preview">
-                  <img :src="uploadEditCoverPreview" alt="伴奏封面预览" />
-                </div>
-                <div v-else class="upload-cover-placeholder">暂无封面</div>
-                <div class="upload-cover-actions">
-                  <input
-                    type="file"
-                    accept=".jpg,.jpeg,.png,.webp"
-                    class="upload-cover-input"
-                    @change="onUploadEditCoverChange"
-                  />
-                  <p class="upload-cover-hint">支持 jpg / png / webp，保存后会替换当前伴奏图片。</p>
-                </div>
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">标题</label>
-              <input v-model="uploadEditForm.title" type="text" class="form-input" placeholder="输入伴奏标题" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">制作人</label>
-              <input v-model="uploadEditForm.producer" type="text" class="form-input" placeholder="输入制作人名称" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">一级风格</label>
-              <select v-model="uploadEditGenreCategory" class="form-input" @change="onUploadEditGenreCategoryChange">
-                <option v-for="category in genreCategoryOptions" :key="category.value" :value="category.value">
-                  {{ category.label }}
-                </option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">二级风格</label>
-              <select v-model="uploadEditForm.genre" class="form-input">
-                <option v-for="genre in uploadGenreChildOptions" :key="genre.value" :value="genre.value">
-                  {{ genre.label }}
-                </option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">BPM</label>
-              <input v-model.number="uploadEditForm.bpm" type="number" :min="BPM_MIN" :max="BPM_MAX" class="form-input" placeholder="例如 140" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">标签</label>
-              <input v-model="uploadEditForm.tags" type="text" class="form-input" placeholder="例如 trap, dark, freestyle" />
-            </div>
-            <label class="upload-free-toggle">
-              <input v-model="uploadEditForm.is_free" type="checkbox" />
-              <span>设为免费伴奏</span>
-            </label>
-          </div>
-          <div class="upload-edit-actions">
-            <button type="button" class="manage-btn" :disabled="uploadEditLoading" @click="closeUploadEdit">取消</button>
-            <button type="button" class="btn btn-primary" :disabled="uploadEditLoading" @click="saveUploadEdit">
-              <span v-if="uploadEditLoading" class="spinner"></span>
-              <span v-else>保存修改</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
+    <ProfileSettingsTab v-if="activeTab === 'settings'" @profile-saved="loadProfileFull" />
+    <ProfileFeedbackTab v-if="activeTab === 'feedback'" />
   </div>
 </template>
 
@@ -1374,6 +300,14 @@ const defaultCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="htt
 .join-date {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+.profile-bio {
+  margin-top: 10px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  max-width: 500px;
 }
 
 /* Tab 栏 */
@@ -2023,6 +957,30 @@ const defaultCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="htt
   border-color: var(--accent);
 }
 
+.form-textarea {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+.form-textarea:focus { border-color: var(--accent); }
+
+.form-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
 .save-btn {
   align-self: flex-start;
   padding: 10px 28px;
@@ -2613,5 +1571,106 @@ const defaultCover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="htt
 .feedback-card-time {
   font-size: 12px;
   color: #6b6b80;
+}
+
+/* ─── 个人中心头部新增样式 ──────────────────────────────────────────────────── */
+
+/* RAP BEATS 账号标识 */
+.profile-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
+}
+.account-tag {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  background: linear-gradient(135deg, #7c3aed 0%, #ec4899 100%);
+  color: #fff;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.account-id {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+}
+.copy-btn {
+  padding: 2px 10px;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.copy-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.copy-tip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  animation: fadeOut 1.5s forwards;
+}
+.copy-tip-ok {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.1);
+}
+.copy-tip-err {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+@keyframes fadeOut {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* 4 个 stats 数字 */
+.profile-stats {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 20px;
+  min-width: 80px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: default;
+  transition: all 0.15s;
+}
+.stat-item:not(:disabled):hover {
+  border-color: var(--accent);
+  background: var(--bg-card);
+}
+.stat-num {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 640px) {
+  .profile-stats { gap: 8px; }
+  .stat-item { padding: 8px 12px; min-width: 60px; }
+  .stat-num { font-size: 16px; }
 }
 </style>

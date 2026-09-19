@@ -144,6 +144,7 @@ function createPool(config: {
     password: config.password,
     database: config.database,
     connectionLimit: config.connectionLimit,
+    charset: 'utf8mb4',  // 显式指定，确保中文 nickname 等字段 LIKE 查询不丢匹配
     waitForConnections: true,
     queueLimit: 0,
     idleTimeout: 60 * 1000,

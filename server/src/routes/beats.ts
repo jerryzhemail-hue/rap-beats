@@ -945,6 +945,48 @@ router.get('/home/public', async (_req: Request, res: Response) => {
   const serializedPopular = popularBeats.map((b: any) => serializeBeatAssets(b));
   const serializedFree = freeBeats.map((b: any) => serializeBeatAssets(b));
 
+  // 首页「社区动态」：取论坛库最近 5 条已发布帖子
+  // 失败兜底返回 []，避免影响首页整体加载
+  // 注意：forum 库没有 users 表，username/avatar 需跨库查主库 users
+  // 缺失的 forum user_id 已通过 scripts/seed-forum-users.sql 补齐到主库
+  let forumPosts: any[] = [];
+  try {
+    const forumDb = getForumDatabaseClient();
+    const posts = await forumDb.queryMany<any>(`
+      SELECT p.id, p.title, p.view_count, p.like_count, p.comment_count AS reply_count, p.created_at, p.user_id
+        FROM forum_posts p
+       WHERE p.status = 'published'
+       ORDER BY p.is_pinned DESC, p.created_at DESC
+       LIMIT 5
+    `);
+    if (posts.length > 0) {
+      const userIds = Array.from(new Set(posts.map((p: any) => p.user_id)));
+      const placeholders = userIds.map(() => '?').join(',');
+      const users = await database.queryMany<{ id: number; username: string; avatar_url: string | null }>(
+        `SELECT id, username, avatar_url FROM users WHERE id IN (${placeholders})`,
+        userIds
+      );
+      const userMap = new Map(users.map((u) => [u.id, u]));
+      forumPosts = posts.map((p: any) => {
+        const u = userMap.get(p.user_id);
+        return {
+          id: p.id,
+          title: p.title,
+          view_count: p.view_count ?? 0,
+          reply_count: p.reply_count ?? 0,
+          like_count: p.like_count ?? 0,
+          created_at: p.created_at instanceof Date ? p.created_at.toISOString() : String(p.created_at ?? ''),
+          username: u?.username ?? `论坛用户#${p.user_id}`,
+          author_avatar: u?.avatar_url ?? null,
+        };
+      });
+    }
+  } catch (err) {
+    // 论坛库查询失败不阻塞首页
+    console.warn('[home/public] forum posts query failed:', (err as Error).message);
+    forumPosts = [];
+  }
+
   res.json({
     latest: { beats: serializedLatest, total: serializedLatest.length },
     popular: { beats: serializedPopular, total: serializedPopular.length },

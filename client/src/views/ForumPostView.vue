@@ -492,7 +492,7 @@ function getAvatarLetter(username: string) {
 
 <style scoped>
 .post-page {
-  max-width: 760px;
+  width: 60%;
   margin: 0 auto;
   padding: 20px 16px;
 }

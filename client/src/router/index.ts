@@ -29,6 +29,29 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      // 公开个人主页（任何人可访问）
+      path: '/u/:id(\\d+)',
+      name: 'UserPublicProfile',
+      component: () => import('../views/UserPublicProfileView.vue'),
+      meta: { public: true },
+      props: true,
+    },
+    {
+      // 公开关注/粉丝列表
+      path: '/u/:id(\\d+)/:tab(following|followers)',
+      name: 'UserSocial',
+      component: () => import('../views/UserSocialView.vue'),
+      meta: { public: true },
+      props: true,
+    },
+    {
+      // 全站用户搜索结果页
+      path: '/users/search',
+      name: 'UserSearch',
+      component: () => import('../views/UserSearchView.vue'),
+      meta: { public: true }
+    },
+    {
       path: '/vip',
       name: 'Vip',
       component: () => import('../views/VipView.vue'),

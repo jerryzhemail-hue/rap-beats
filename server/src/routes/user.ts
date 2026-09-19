@@ -2,7 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
-import { getDatabaseClient } from '../database/client.js';
+import { getDatabaseClient, getForumDatabaseClient } from '../database/client.js';
 import {
   canAccessHighQuality,
   canAccessVipContent,
@@ -131,11 +131,11 @@ router.get('/user/downloads', requireAuth, async (req: AuthRequest, res) => {
   res.json({ downloads: downloads.map((item) => serializeBeatAssets(item as any)), total, page, totalPages: Math.ceil(total / limit) });
 });
 
-// PUT /api/user/profile — 修改个人信息
+// PUT /api/user/profile — 修改个人信息（username / email / nickname / bio）
 router.put('/user/profile', requireAuth, async (req: AuthRequest, res) => {
   const database = getDatabaseClient();
   const userId = req.user!.id;
-  const { username, email } = req.body;
+  const { username, email, nickname, bio } = req.body as { username?: string; email?: string; nickname?: string; bio?: string };
 
   if (!username || !email) {
     return res.status(400).json({ error: '用户名和邮箱不能为空' });
@@ -143,18 +143,71 @@ router.put('/user/profile', requireAuth, async (req: AuthRequest, res) => {
   if (username.length < 3 || username.length > 20) {
     return res.status(400).json({ error: '用户名需要3-20个字符' });
   }
-
-  const existing = await database.queryOne<{ id: number }>(
-    'SELECT id FROM users WHERE (username = ? OR email = ?) AND id != ?',
-    [username, email, userId]
-  );
-  if (existing) {
-    return res.status(400).json({ error: '用户名或邮箱已被使用' });
+  // 用户名仅允许字母/数字/下划线/连字符
+  if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+    return res.status(400).json({ error: '用户名仅支持字母、数字、下划线和连字符' });
+  }
+  // 邮箱长度限制
+  if (email.length > 254) {
+    return res.status(400).json({ error: '邮箱长度不能超过 254 字符' });
   }
 
-  await database.execute('UPDATE users SET username = ?, email = ? WHERE id = ?', [username, email, userId]);
+  // 昵称校验（可选字段）
+  if (nickname !== undefined && nickname !== null && nickname !== '') {
+    if (nickname.length < 2 || nickname.length > 20) {
+      return res.status(400).json({ error: '昵称需要2-20个字符' });
+    }
+    // 禁止 HTML / 控制字符，避免任何潜在的 v-html 误用造成 XSS
+    if (/[<>]|[\x00-\x1F\x7F]/.test(nickname)) {
+      return res.status(400).json({ error: '昵称不允许包含 < > 或控制字符' });
+    }
+  }
+  const finalNickname = (nickname && nickname.trim()) || null;
+
+  // bio 校验（可选字段，最多 500 字）
+  if (bio !== undefined && bio !== null && bio !== '') {
+    if (bio.length > 500) {
+      return res.status(400).json({ error: '个人简介不能超过 500 字符' });
+    }
+    if (/[<>]/.test(bio)) {
+      return res.status(400).json({ error: '个人简介不允许包含 < >' });
+    }
+  }
+  const finalBio = (bio !== undefined) ? (bio || null) : undefined;
+
+  // 唯一性冲突检查（用户名 / 邮箱 / 昵称三者均不能与他人重复）
+  const existing = await database.queryOne<{ id: number }>(
+    'SELECT id FROM users WHERE (username = ? OR email = ? OR (nickname = ? AND nickname IS NOT NULL)) AND id != ?',
+    [username, email, finalNickname, userId]
+  );
+  if (existing) {
+    return res.status(400).json({ error: '用户名、邮箱或昵称已被使用' });
+  }
+
+  // 生成 nickname_pinyin（简易：取昵称全字符小写去空格，给前端做扩展用）
+  const nicknamePinyin = finalNickname ? finalNickname.toLowerCase().replace(/\s+/g, '') : null;
+
+  // bio 为 undefined 时不更新该字段（保持原值）
+  if (finalBio !== undefined) {
+    await database.execute(
+      'UPDATE users SET username = ?, email = ?, nickname = ?, nickname_pinyin = ?, bio = ? WHERE id = ?',
+      [username, email, finalNickname, nicknamePinyin, finalBio, userId]
+    );
+  } else {
+    await database.execute(
+      'UPDATE users SET username = ?, email = ?, nickname = ?, nickname_pinyin = ? WHERE id = ?',
+      [username, email, finalNickname, nicknamePinyin, userId]
+    );
+  }
   const user = await getUserProfileById(userId);
-  res.json({ message: '更新成功', user: serializeUserAssets(user as UserProfileRow) });
+  res.json({
+    message: '更新成功',
+    user: {
+      ...serializeUserAssets(user as UserProfileRow),
+      nickname: finalNickname,
+      bio: finalBio !== undefined ? finalBio : (user as any)?.bio,
+    }
+  });
 });
 
 // POST /api/user/avatar — 上传头像
@@ -276,69 +329,134 @@ router.get('/user/vip-status', requireAuth, async (req: AuthRequest, res) => {
   });
 });
 
-// GET /api/users/search — 搜索全站用户（支持用户名/邮箱/手机号）
-router.get('/users/search', requireAuth, async (req: AuthRequest, res) => {
-  const db = getDatabaseClient();
-  const q = (req.query.q as string || '').trim();
-  const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
+// ─── 个人中心 - 完整个人资料（聚合 stats + IP 归属地） ────────────────────────
+//
+// GET /api/user/profile/full?user_id=X&ip_view=login|register
+//   - 默认看自己（user_id 可省）
+//   - 看别人时，IP 归属地对他人隐藏（前端按 is_self 判断）
+//   - 返回 4 项关键统计：关注 / 粉丝 / 获赞（总）/ 收藏（总）
+router.get('/user/profile/full', requireAuth, async (req: AuthRequest, res) => {
+  const database = getDatabaseClient();
+  const forumDb = getForumDatabaseClient();
 
-  if (!q) {
-    return res.json({ users: [] });
+  const targetId = req.query.user_id ? parseInt(req.query.user_id as string) : req.user!.id;
+  const viewerId = req.user!.id;
+  const isSelf = targetId === viewerId;
+
+  if (isNaN(targetId)) {
+    return res.status(400).json({ error: '无效的用户ID' });
   }
 
-  // 拉黑过滤：排除我拉黑的人，以及拉黑我的人
-  const blockedMe = await db.queryMany<{ blocker_id: number }>(
-    'SELECT blocker_id FROM user_blocks WHERE blocked_id = ?',
-    [req.user!.id]
+  // 基础资料（主库）
+  const user = await database.queryOne<{
+    id: number;
+    username: string;
+    nickname: string | null;
+    bio: string | null;
+    email: string;
+    role: string;
+    vip_level: string;
+    vip_expire_at: string | null;
+    avatar_url: string | null;
+    created_at: string;
+    is_beatmaker: number;
+  }>(
+    `SELECT id, username, nickname, bio, email, role, vip_level, vip_expire_at,
+            avatar_url, created_at, is_beatmaker
+       FROM users WHERE id = ?`,
+    [targetId]
   );
-  const iBlocked = await db.queryMany<{ blocked_id: number }>(
-    'SELECT blocked_id FROM user_blocks WHERE blocker_id = ?',
-    [req.user!.id]
-  );
-  const excludeIds = [req.user!.id, ...blockedMe.map(b => b.blocker_id), ...iBlocked.map(b => b.blocked_id)];
-  const excludePlaceholders = excludeIds.map(() => '?').join(',');
-
-  // 先探测 users 表是否包含 phone / email 字段，缺失时跳过对应匹配条件，避免 1054 报错
-  const cols = await db.queryMany<{ COLUMN_NAME: string }>(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'`
-  );
-  const colSet = new Set(cols.map(c => c.COLUMN_NAME));
-  const hasEmail = colSet.has('email');
-  const hasPhone = colSet.has('phone');
-  const hasAvatarUrl = colSet.has('avatar_url');
-  const avatarCol = hasAvatarUrl ? 'avatar_url' : (colSet.has('avatar') ? 'avatar' : 'NULL');
-
-  const conditions: string[] = ['username LIKE ?'];
-  const params: any[] = [`%${q}%`];
-  if (hasEmail) {
-    conditions.push('email LIKE ?');
-    params.push(`%${q}%`);
-  }
-  if (hasPhone) {
-    conditions.push('phone = ?', 'phone LIKE ?');
-    params.push(q, `%${q}%`);
+  if (!user) {
+    return res.status(404).json({ error: '用户不存在' });
   }
 
-  const users = await db.queryMany<{ id: number; username: string; email: string; phone: string | null; avatar_url: string }>(
-    `SELECT id, username, email, phone, ${avatarCol} AS avatar_url
-       FROM users
-      WHERE id NOT IN (${excludePlaceholders})
-        AND (${conditions.join(' OR ')})
-      ORDER BY
-        CASE WHEN username = ? THEN 0
-             WHEN username LIKE ? THEN 1
-             ELSE 2 END,
-        id ASC
-      LIMIT ?`,
-    [...excludeIds, ...params, q, `${q}%`, limit]
+  // 隐私：邮箱对外人隐藏
+  const publicEmail = isSelf ? user.email : null;
+
+  // 关注 / 粉丝数：优先从 forum_user_profiles 取（已有计数），fallback COUNT(*)
+  const profile = await forumDb.queryOne<{
+    follower_count: number;
+    following_count: number;
+    post_count: number;
+  }>(
+    'SELECT follower_count, following_count, post_count FROM forum_user_profiles WHERE user_id = ?',
+    [targetId]
   );
 
-  res.json({ users: users.map(u => ({
-    id: u.id,
-    username: u.username || u.email || u.phone || `用户${u.id}`,
-    avatar_url: u.avatar_url || null,
-  })) });
+  const [followersRow, followingsRow] = await Promise.all([
+    forumDb.queryOne<{ c: number }>('SELECT COUNT(*) AS c FROM forum_follows WHERE following_id = ?', [targetId]),
+    forumDb.queryOne<{ c: number }>('SELECT COUNT(*) AS c FROM forum_follows WHERE follower_id = ?', [targetId]),
+  ]);
+
+  // 获赞（总）：beats 评论点赞（暂未维护 likes 表，统计 forum_comment_likes 中针对该用户的评论）+ 帖子点赞 + 帖子评论点赞
+  //   - 帖子获赞：直接读 forum_posts.like_count 累计（COUNT(*) SUM）
+  //   - 评论获赞：读 forum_comments.like_count SUM
+  const [postLikesRow, commentLikesRow] = await Promise.all([
+    forumDb.queryOne<{ total: number | null }>(
+      'SELECT COALESCE(SUM(like_count), 0) AS total FROM forum_posts WHERE user_id = ?',
+      [targetId]
+    ),
+    forumDb.queryOne<{ total: number | null }>(
+      'SELECT COALESCE(SUM(like_count), 0) AS total FROM forum_comments WHERE user_id = ?',
+      [targetId]
+    ),
+  ]);
+
+  // 收藏（总）：beats 收藏 + 帖子收藏
+  const [beatFavRow, postFavRow] = await Promise.all([
+    database.queryOne<{ c: number }>('SELECT COUNT(*) AS c FROM favorites WHERE user_id = ?', [targetId]),
+    forumDb.queryOne<{ c: number }>('SELECT COUNT(*) AS c FROM forum_favorites WHERE user_id = ?', [targetId]),
+  ]);
+
+  // 我是否关注了他 / 他是否关注了我
+  const [followingMe, followMe] = await Promise.all([
+    forumDb.queryOne<{ follower_id: number }>(
+      'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
+      [targetId, viewerId]
+    ),
+    forumDb.queryOne<{ follower_id: number }>(
+      'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
+      [viewerId, targetId]
+    ),
+  ]);
+
+  const stats = {
+    following_count: Number(profile?.following_count ?? followingsRow?.c ?? 0),
+    follower_count:  Number(profile?.follower_count  ?? followersRow?.c  ?? 0),
+    post_count:      Number(profile?.post_count      ?? 0),
+    likes_received:  Number(postLikesRow?.total ?? 0) + Number(commentLikesRow?.total ?? 0),
+    favorites_count: Number(beatFavRow?.c ?? 0) + Number(postFavRow?.c ?? 0),
+    beats_uploaded:  Number((await database.queryOne<{ c: number }>(
+      'SELECT COUNT(*) AS c FROM beats WHERE uploaded_by = ?', [targetId]
+    ))?.c ?? 0),
+  };
+
+  res.json({
+    id: user.id,
+    username: user.username,
+    nickname: user.nickname || user.username,  // 昵称缺省回退 username
+    bio: user.bio,
+    email: publicEmail,
+    avatar_url: user.avatar_url || null,
+    role: user.role,
+    vip_level: getEffectiveVipLevel(user),
+    vip_expire_at: user.role === 'admin' ? null : user.vip_expire_at,
+    is_beatmaker: user.is_beatmaker ?? 0,
+    created_at: user.created_at,
+    is_self: isSelf,
+    // 关注关系（相对当前 viewer）
+    is_followed_by_me: !!followMe,
+    is_following_me: !!followingMe,
+    // 4 个关键 stats
+    stats,
+  });
 });
+
+// ─── 用户搜索升级：双模式（rapbeats 账号 / 昵称模糊） ──────────────────────
+//
+// GET /api/users/search?q=&type=rapbeats|nickname&page=1&limit=20
+//   - type=rapbeats：精确 / 前缀匹配 username（RAP BEATS 账号搜索）
+//   - type=nickname：LIKE %q% 模糊匹配 nickname
+//   - 默认 rapbeats（兼容旧调用）
 
 export default router;

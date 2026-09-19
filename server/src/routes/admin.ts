@@ -253,6 +253,10 @@ router.delete('/admin/users/:id', requireAdmin, async (req: AuthRequest, res) =>
   await forumDb.execute('DELETE FROM forum_likes WHERE user_id = ?', [id]);
   await forumDb.execute('DELETE FROM forum_favorites WHERE user_id = ?', [id]);
   await forumDb.execute('DELETE FROM forum_sign_ins WHERE user_id = ?', [id]);
+  // 关注关系（双向都要清：作为 follower 和作为 following 的记录）
+  await forumDb.execute('DELETE FROM forum_follows WHERE follower_id = ? OR following_id = ?', [id, id]);
+  // 用户画像（follower/following/post 计数）
+  await forumDb.execute('DELETE FROM forum_user_profiles WHERE user_id = ?', [id]);
   await membershipDb.execute('DELETE FROM user_points WHERE user_id = ?', [id]);
   await membershipDb.execute('DELETE FROM point_transactions WHERE user_id = ?', [id]);
   await forumDb.execute('DELETE FROM forum_lottery_records WHERE user_id = ?', [id]);
@@ -298,6 +302,8 @@ router.post('/admin/maintenance/clear-test-users', requireAdmin, async (_req: Au
   await forumDb.execute("DELETE FROM forum_likes WHERE user_id <> ?", [adminId]);
   await forumDb.execute("DELETE FROM forum_favorites WHERE user_id <> ?", [adminId]);
   await forumDb.execute("DELETE FROM forum_sign_ins WHERE user_id <> ?", [adminId]);
+  await forumDb.execute("DELETE FROM forum_follows WHERE follower_id <> ? OR following_id <> ?", [adminId, adminId]);
+  await forumDb.execute("DELETE FROM forum_user_profiles WHERE user_id <> ?", [adminId]);
   await membershipDb.execute("DELETE FROM user_points WHERE user_id <> ?", [adminId]);
   await membershipDb.execute("DELETE FROM point_transactions WHERE user_id <> ?", [adminId]);
   await forumDb.execute("DELETE FROM forum_lottery_records WHERE user_id <> ?", [adminId]);

@@ -55,6 +55,8 @@ export type VipLevel = 'free' | 'basic' | 'premium' | 'ultimate'
 export interface User {
   id: number
   username: string
+  /** 显示昵称（优先 nickname，缺省回退 username） */
+  nickname?: string | null
   email: string
   role: 'admin' | 'user'
   vip_level: VipLevel
@@ -62,6 +64,44 @@ export interface User {
   avatar_url?: string | null
   created_at?: string
   is_beatmaker?: number
+}
+
+/** 个人中心 - 完整个人资料（含聚合 stats） */
+export interface UserProfileFull {
+  id: number
+  username: string
+  nickname: string
+  bio: string | null
+  email: string | null          // 隐私：他人看时为 null
+  avatar_url: string | null
+  role: 'admin' | 'user'
+  vip_level: VipLevel
+  vip_expire_at: string | null
+  is_beatmaker: number
+  created_at: string
+  is_self: boolean
+  // 关注关系（相对当前 viewer）
+  is_followed_by_me: boolean
+  is_following_me: boolean
+  // 关键统计
+  stats: {
+    following_count: number
+    follower_count: number
+    post_count: number
+    likes_received: number
+    favorites_count: number
+    beats_uploaded: number
+  }
+}
+
+/** 用户搜索结果项 */
+export interface UserSearchItem {
+  id: number
+  username: string
+  nickname: string
+  avatar_url: string | null
+  is_beatmaker: number
+  vip_level: string
 }
 
 export interface VipStatus {

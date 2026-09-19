@@ -266,38 +266,23 @@ router.post('/forum/messages', requireAuth, messageLimiter, async (req: AuthRequ
     return res.status(403).json({ error: '你已拉黑该用户，无法发送消息' });
   }
 
-  // 关注关系检查：互不关注时新消息最多 1 条
-  const [iFollow, theyFollow] = await Promise.all([
-    db.queryOne<{ follower_id: number }>(
-      'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
-      [senderId, receiver_id]
-    ),
-    db.queryOne<{ follower_id: number }>(
-      'SELECT follower_id FROM forum_follows WHERE follower_id = ? AND following_id = ?',
-      [receiver_id, senderId]
-    ),
-  ]);
-
-  if (!iFollow && !theyFollow) {
-    const conversationId = generateConversationId(senderId, receiver_id);
-    const theirReply = await db.queryOne<{ id: number }>(
-      `SELECT id FROM forum_messages
-       WHERE conversation_id = ? AND sender_id = ? AND message_type = 'text' LIMIT 1`,
-      [conversationId, receiver_id]
-    );
-    const myTextCount = await db.queryOne<{ c: number }>(
-      `SELECT COUNT(*) as c FROM forum_messages
-       WHERE conversation_id = ? AND sender_id = ? AND message_type = 'text'`,
-      [conversationId, senderId]
-    );
-    if (!theirReply && (myTextCount?.c || 0) >= 1) {
-      return res.status(429).json({
-        error: '由于对方并未关注你，在收到对方回复之前，你最多只能发送 1 条文字消息',
-      });
-    }
-  }
-
+  // 限制：无论是否互相关注，只要对方没回复过你，就只能发 1 条消息
   const conversationId = generateConversationId(senderId, receiver_id);
+  const theirReply = await db.queryOne<{ id: number }>(
+    `SELECT id FROM forum_messages
+     WHERE conversation_id = ? AND sender_id = ? AND message_type = 'text' LIMIT 1`,
+    [conversationId, receiver_id]
+  );
+  const myTextCount = await db.queryOne<{ c: number }>(
+    `SELECT COUNT(*) as c FROM forum_messages
+     WHERE conversation_id = ? AND sender_id = ? AND message_type = 'text'`,
+    [conversationId, senderId]
+  );
+  if (!theirReply && (myTextCount?.c || 0) >= 1) {
+    return res.status(429).json({
+      error: '对方尚未回复你的消息，请等待对方回复后再继续发送',
+    });
+  }
 
   // 获取或创建会话
   let conversation = await db.queryOne<ForumConversationRow>(

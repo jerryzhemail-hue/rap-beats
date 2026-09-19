@@ -37,10 +37,18 @@ router.post('/register', registerLimiter, async (req, res) => {
   if (username.length < 3 || username.length > 20) {
     return res.status(400).json({ error: '用户名长度需在3-20字符之间' });
   }
+  // 用户名仅允许字母/数字/下划线/连字符（与搜索/URL 兼容性一致）
+  if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+    return res.status(400).json({ error: '用户名仅支持字母、数字、下划线和连字符' });
+  }
 
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
     return res.status(400).json({ error: '邮箱格式不正确' });
+  }
+  // email 实际存储上限 255，留 1 字符 buffer 提示用户
+  if (email.length > 254) {
+    return res.status(400).json({ error: '邮箱长度不能超过 254 字符' });
   }
 
   if (password.length < 6) {
@@ -63,10 +71,11 @@ router.post('/register', registerLimiter, async (req, res) => {
   const salt = bcrypt.genSaltSync(10);
   const password_hash = bcrypt.hashSync(password, salt);
 
-  // 插入用户
+  // 插入用户（同时记录注册 IP）
+  const registerIp = req.ip || '';
   const result = await database.execute(
-    'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
-    [username, email, password_hash]
+    'INSERT INTO users (username, email, password_hash, register_ip) VALUES (?, ?, ?, ?)',
+    [username, email, password_hash, registerIp]
   );
 
   if (!result.insertId) {
@@ -148,6 +157,13 @@ router.post('/login', loginLimiter, async (req, res) => {
   if (!isPasswordValid) {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
+
+  // 异步更新最近登录 IP（不阻塞登录响应）
+  const loginIp = req.ip || '';
+  database.execute(
+    'UPDATE users SET last_login_ip = ? WHERE id = ?',
+    [loginIp, user.id]
+  ).catch((err) => console.error('[login] IP 写入失败:', (err as Error).message));
 
   // 生成 Token
   const tokenPayload = serializeUserAssets({

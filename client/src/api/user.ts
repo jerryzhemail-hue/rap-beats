@@ -1,6 +1,6 @@
 import { request } from './request'
 import { requestUploadTarget, uploadFileToTarget, type DirectUploadTarget } from './directUpload'
-import type { User, VipStatus } from '@/types'
+import type { User, VipStatus, UserProfileFull, UserSearchItem } from '@/types'
 
 export async function fetchMyUploads(page = 1) {
   return request(`/api/user/uploads?page=${page}`)
@@ -10,7 +10,72 @@ export async function fetchMyDownloads(page = 1) {
   return request(`/api/user/downloads?page=${page}`)
 }
 
-export async function updateProfile(data: { username: string; email: string }) {
+/** 公开关注/粉丝列表聚合接口 */
+export interface SocialListItem {
+  id: number
+  username: string
+  nickname: string
+  avatar_url: string | null
+  is_beatmaker: number
+  vip_level: string
+  is_followed_by_me: boolean
+  followed_at: string
+}
+
+export async function fetchSocialList(params: {
+  userId: number
+  type: 'following' | 'followers'
+  page?: number
+  limit?: number
+}): Promise<{
+  type: 'following' | 'followers'
+  users: SocialListItem[]
+  pagination: { page: number; page_size: number; total: number; total_pages: number }
+}> {
+  const qs = new URLSearchParams()
+  qs.set('user_id', String(params.userId))
+  qs.set('type', params.type)
+  if (params.page) qs.set('page', String(params.page))
+  if (params.limit) qs.set('limit', String(params.limit))
+  return request(`/api/user/social/list?${qs.toString()}`)
+}
+
+/** 关注 / 取消关注用户（调用现有 forum 接口） */
+export async function followUser(targetId: number): Promise<void> {
+  return request(`/api/forum/users/${targetId}/follow`, { method: 'POST' })
+}
+
+export async function unfollowUser(targetId: number): Promise<void> {
+  return request(`/api/forum/users/${targetId}/follow`, { method: 'DELETE' })
+}
+
+/** 个人中心 - 拉取完整个人资料（含 stats）
+ *  @param userId 看他人时传入，看自己可省略
+ */
+export async function fetchProfileFull(userId?: number): Promise<UserProfileFull> {
+  const qs = new URLSearchParams()
+  if (userId) qs.set('user_id', String(userId))
+  return request<UserProfileFull>(`/api/user/profile/full?${qs.toString()}`)
+}
+
+/** 用户搜索（双模式）
+ *  @param type 'rapbeats' | 'nickname'
+ */
+export async function searchUsers(params: {
+  q: string
+  type?: 'rapbeats' | 'nickname'
+  page?: number
+  limit?: number
+}): Promise<{ type: 'rapbeats' | 'nickname'; users: UserSearchItem[]; total: number; page: number; totalPages: number }> {
+  const qs = new URLSearchParams()
+  qs.set('q', params.q)
+  if (params.type) qs.set('type', params.type)
+  if (params.page) qs.set('page', String(params.page))
+  if (params.limit) qs.set('limit', String(params.limit))
+  return request(`/api/users/search?${qs.toString()}`)
+}
+
+export async function updateProfile(data: { username: string; email: string; nickname?: string; bio?: string }): Promise<{ message: string; user: User }> {
   return request('/api/user/profile', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
