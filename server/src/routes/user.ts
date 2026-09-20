@@ -166,16 +166,35 @@ router.put('/user/profile', requireAuth, async (req: AuthRequest, res) => {
   const nicknamePinyin = finalNickname ? finalNickname.toLowerCase().replace(/\s+/g, '') : null;
 
   // bio 为 undefined 时不更新该字段（保持原值）
-  if (finalBio !== undefined) {
-    await database.execute(
-      'UPDATE users SET username = ?, email = ?, nickname = ?, nickname_pinyin = ?, bio = ? WHERE id = ?',
-      [username, email, finalNickname, nicknamePinyin, finalBio, userId]
-    );
-  } else {
-    await database.execute(
-      'UPDATE users SET username = ?, email = ?, nickname = ?, nickname_pinyin = ? WHERE id = ?',
-      [username, email, finalNickname, nicknamePinyin, userId]
-    );
+  try {
+    if (finalBio !== undefined) {
+      await database.execute(
+        'UPDATE users SET username = ?, email = ?, nickname = ?, nickname_pinyin = ?, bio = ? WHERE id = ?',
+        [username, email, finalNickname, nicknamePinyin, finalBio, userId]
+      );
+    } else {
+      await database.execute(
+        'UPDATE users SET username = ?, email = ?, nickname = ?, nickname_pinyin = ? WHERE id = ?',
+        [username, email, finalNickname, nicknamePinyin, userId]
+      );
+    }
+  } catch (error: any) {
+    // 并发竞态兜底：SELECT-then-UPDATE 之间另一请求先写入同名/邮箱/昵称，
+    // UNIQUE 约束在 DB 层兜底，转成 409 + 具体字段提示。
+    if (error?.code === 'ER_DUP_ENTRY' || Number(error?.errno) === 1062) {
+      const msg = error?.sqlMessage || '';
+      if (/username/i.test(msg)) {
+        return res.status(409).json({ error: '用户名已被使用，请换一个' });
+      }
+      if (/email/i.test(msg)) {
+        return res.status(409).json({ error: '邮箱已被使用，请换一个' });
+      }
+      if (/nickname/i.test(msg)) {
+        return res.status(409).json({ error: '昵称已被使用，请换一个' });
+      }
+      return res.status(409).json({ error: '用户名、邮箱或昵称已被使用' });
+    }
+    throw error;
   }
   const user = await getUserProfileById(userId);
   res.json({

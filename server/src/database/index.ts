@@ -36,15 +36,37 @@ export async function initDatabase(
   `);
 
   // 幂等迁移执行器：version 已应用则跳过；
-  // alreadyApplied 用于兼容历史库（列已存在但未记录版本时，直接标记为已应用）
-  async function migrate(version: number, name: string, sqls: string[], alreadyApplied?: () => Promise<boolean>) {
+  // alreadyApplied 用于兼容历史库（列已存在但未记录版本时，直接标记为已应用）。
+  // 实现约定：传「期望存在的列名集合」，只有全部都存在才视为已应用 —— 这样既能识别
+  // 「完整历史库」跳过迁移，又能识别「部分迁移过的库」继续补齐剩余列。
+  async function migrate(
+    version: number,
+    name: string,
+    sqls: string[],
+    alreadyApplied?: {
+      table: string;
+      // 期望已存在的列名；任一缺失都视为未应用，继续执行 sqls
+      columns: string[];
+    },
+  ) {
     const done = await db.queryOne<{ version: number }>(
       'SELECT version FROM schema_migrations WHERE version = ?', [version]);
     if (done) return;
-    if (alreadyApplied && await alreadyApplied()) {
-      await db.execute('INSERT INTO schema_migrations (version, name) VALUES (?, ?)', [version, name]);
-      console.log(`[migrate] v${version} ${name} 已存在，标记为已应用`);
-      return;
+    if (alreadyApplied) {
+      const placeholders = alreadyApplied.columns.map(() => '?').join(',');
+      const existing = await db.queryMany<{ COLUMN_NAME: string }>(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME IN (${placeholders})`,
+        [alreadyApplied.table, ...alreadyApplied.columns],
+      );
+      const have = new Set(existing.map((r) => r.COLUMN_NAME));
+      const missing = alreadyApplied.columns.filter((c) => !have.has(c));
+      if (missing.length === 0) {
+        await db.execute('INSERT INTO schema_migrations (version, name) VALUES (?, ?)', [version, name]);
+        console.log(`[migrate] v${version} ${name} 已存在，标记为已应用`);
+        return;
+      }
+      console.log(`[migrate] v${version} ${name} 缺失列 ${missing.join(',')}，继续迁移`);
     }
     for (const sql of sqls) await db.execute(sql);
     await db.execute('INSERT INTO schema_migrations (version, name) VALUES (?, ?)', [version, name]);
@@ -133,10 +155,12 @@ export async function initDatabase(
     "ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(64) NULL AFTER register_ip",
     "ALTER TABLE users ADD COLUMN register_region VARCHAR(100) NULL COMMENT '注册 IP 归属地 JSON' AFTER register_ip",
     "ALTER TABLE users ADD COLUMN last_login_region VARCHAR(100) NULL COMMENT '最近登录 IP 归属地 JSON' AFTER last_login_ip",
-  ], async () => {
-    const col = await db.queryOne<{ COLUMN_NAME: string }>(
-      "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'nickname'");
-    return !!col;
+  ], {
+    table: 'users',
+    columns: [
+      'nickname', 'nickname_pinyin', 'register_ip', 'bio',
+      'last_login_ip', 'register_region', 'last_login_region',
+    ],
   });
 
   // IP 历史日志表（追踪 IP 与归属地变更）

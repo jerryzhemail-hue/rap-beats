@@ -7,6 +7,11 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# 顶层默认最小权限（contents: read）。
+# 各 job 按需扩展：build 需要 packages: write 推镜像；deploy 仅用 secrets.SERVER_SSH_PRIVATE_KEY 不需要 GITHUB_TOKEN 写权限。
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
   SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/rap-beats-server:latest
@@ -18,6 +23,8 @@ jobs:
   test:
     name: Backend Tests (vitest 全量)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       mysql:
         image: mysql:8.0
@@ -150,6 +157,8 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository

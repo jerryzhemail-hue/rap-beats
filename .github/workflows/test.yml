@@ -7,6 +7,10 @@ on:
     branches: [master, develop]
   workflow_dispatch:
 
+# 顶层最小权限：仅读。test job 不需要写 GITHUB_TOKEN。
+permissions:
+  contents: read
+
 jobs:
   backend-test:
     name: Backend Tests (vitest 全量 92 条)

@@ -248,6 +248,19 @@ crontab -e
 
 服务器上的 `.env` 文件**不会被部署覆盖**（`./deploy.sh` 的 rsync 排除了 `.env`），保持独立配置。CI 部署通过 GitHub Variables/Secrets 注入到容器环境变量。
 
+### Trust Proxy 配置（防 IP 限流失效）
+
+Express `trust proxy` 设置决定 `req.ip` 是否读取 `X-Forwarded-For` 头，直接影响基于 IP 的限流与防刷。**配错会让所有用户共享一个限流额度（限流失效）。**
+
+| 部署形态 | `TRUST_PROXY` 值 | 备注 |
+|----------|------------------|------|
+| 直接暴露 3000 端口（不推荐） | `loopback`（默认） | 不读 XFF，防伪造 |
+| 单层反代（同机直连，nginx 与 server 同容器/同宿主机） | `1` | 信任最近 1 跳代理 |
+| 单层反代（跨机，nginx 与 server 不同机器） | `<反代 IP 或 CIDR>` | 例如 `TRUST_PROXY=10.0.0.5` 或 `TRUST_PROXY=10.0.0.0/24` |
+| 多层反代（CDN + nginx） | `true` | 完全信任，按需收敛 |
+
+**自检**：部署后 `curl -H "X-Forwarded-For: 1.2.3.4" https://your-domain/api/health` 看日志输出 `req.ip` 是否为 `1.2.3.4`（或上游真实 IP）。如果还是 `127.0.0.1`，说明 trust proxy 未生效。
+
 ---
 
 ## 常见问题

@@ -13,9 +13,17 @@ export function buildApp() {
 
   const app = express();
 
-  // 信任一层反向代理（生产环境 nginx / aliyun slb），让 req.ip 读取 X-Forwarded-For
-  // 默认只信任本机回环代理（loopback），避免直接暴露时伪造 X-Forwarded-For 绕过 IP 限流。
-  // 生产如需信任 nginx/SLB，显式设置 TRUST_PROXY=1（或具体代理 IP/网段）。
+  // ─── Express trust proxy（影响 req.ip，从而影响基于 IP 的限流 / 防刷）───────────
+  // 默认 'loopback'：只信任本机回环代理（127.0.0.1, ::1, 127.0.0.0/8 等），
+  // 直连时不会被伪造 X-Forwarded-For 绕过 IP 限流（安全默认值）。
+  //
+  // 部署在反代后必须调整，详见 DEPLOY.md "Trust Proxy 配置" 一节：
+  //   - 单层反代（nginx/SLB 与 server 同机直连）：TRUST_PROXY=1
+  //   - 单层反代（跨机）：TRUST_PROXY=<反代 IP 或 CIDR>
+  //   - 多层反代（CDN + nginx）：TRUST_PROXY=true
+  //   - 直接暴露 3000 端口（不推荐）：保持默认 'loopback'
+  //
+  // 配错后果：req.ip 永远为 '::ffff:127.0.0.1'，所有用户共享一个限流额度（限流失效）。
   app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
 
   app.use(cors({
