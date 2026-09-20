@@ -10,9 +10,9 @@ import mysql from 'mysql2/promise';
 const MAIN_DB = {
   host: process.env.DB_HOST || '127.0.0.1',
   port: Number(process.env.DB_PORT || '3306'),
-  user: process.env.DB_USER || 'rapbeats',
-  password: process.env.DB_PASSWORD || 'Wangzhe.q5',
-  database: process.env.DB_NAME || 'rap_beats',
+  user: process.env.DB_USER || '',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || '',
 };
 
 const FORUM_DB = {
@@ -20,8 +20,16 @@ const FORUM_DB = {
   port: Number(process.env.FORUM_DB_PORT || MAIN_DB.port),
   user: process.env.FORUM_DB_USER || MAIN_DB.user,
   password: process.env.FORUM_DB_PASSWORD || MAIN_DB.password,
-  database: process.env.FORUM_DB_NAME || 'rap_beats_forum',
+  database: process.env.FORUM_DB_NAME || '',
 };
+
+// 安全检查：硬编码默认密码已移除。运行前必须显式设置 DB_PASSWORD / FORUM_DB_PASSWORD，
+// 否则连接会因为「Access denied」失败——这是设计上的 fail-fast，避免误连到错的库。
+if (!MAIN_DB.password) {
+  console.error('[migrate-forum-data] DB_PASSWORD 未设置。请通过环境变量注入，或用 .env 文件。');
+  console.error('  用法：DB_PASSWORD=xxx FORUM_DB_PASSWORD=xxx npx tsx src/scripts/migrate-forum-data.ts');
+  process.exit(1);
+}
 
 interface ForumCategory {
   id: number;

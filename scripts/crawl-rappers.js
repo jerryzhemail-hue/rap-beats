@@ -20,10 +20,15 @@ const __dirname = path.dirname(__filename);
 const DB_CONFIG = {
   host: process.env.DB_HOST || '127.0.0.1',
   port: Number(process.env.DB_PORT || '3306'),
-  user: process.env.DB_USER || 'rapbeats',
-  password: process.env.DB_PASSWORD || 'Wangzhe.q5',
-  database: process.env.DB_NAME || 'rap_beats',
+  user: process.env.DB_USER || '',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || '',
 };
+
+if (!process.env.DB_PASSWORD) {
+  console.error('[crawl-rappers] DB_PASSWORD 未设置。请通过环境变量注入。');
+  process.exit(1);
+}
 
 // 安全的 HTTP 请求
 function httpGet(url) {

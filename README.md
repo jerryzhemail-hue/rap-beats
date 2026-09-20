@@ -53,8 +53,8 @@ DB_PORT=3307
 DB_USER=dev_user
 DB_PASSWORD=dev_pass_2024
 DB_NAME=rap_beats_dev
-FORUM_DB_NAME=rap_beats_forum
-MEMBERSHIP_DB_NAME=rap_beats_membership
+FORUM_DB_NAME=rap_beats_forum_dev
+MEMBERSHIP_DB_NAME=rap_beats_membership_dev
 STORAGE_DRIVER=local
 ```
 
@@ -62,6 +62,11 @@ STORAGE_DRIVER=local
 > 不要复制到本地 dev 环境。
 >
 > 本地开发无需真实支付/OSS。如确需阿里云 OSS，再补充 OSS_* 配置（参考 `.env.production`）。
+>
+> **必填的密钥**（后端启动时会 fail-fast 校验）：
+> - `JWT_SECRET`：至少 32 字符随机串（生产建议 64 字符 hex）
+> - `BEATMAKER_IDCARD_KEY` + `BEATMAKER_IDCARD_PEPPER`：Beatmaker 身份证加密密钥，**必须**配置且不能是占位默认值
+> - `TRUST_PROXY`：见 DEPLOY.md "Trust Proxy 配置"，错配会导致 IP 限流失效
 
 ## 启动项目
 

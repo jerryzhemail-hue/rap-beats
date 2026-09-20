@@ -1,5 +1,6 @@
 -- 中文说唱 Rappers 数据导入脚本
--- 运行: mysql -u rapbeats -pWangzhe.q5 rap_beats < scripts/insert-rappers.sql
+-- 运行: mysql -u $DB_USER -p$DB_PASSWORD rap_beats < scripts/insert-rappers.sql
+--       （请用环境变量注入凭据，不要在命令行暴露密码）
 
 SET NAMES utf8mb4;
 
