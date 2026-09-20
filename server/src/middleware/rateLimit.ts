@@ -14,8 +14,9 @@ type RateLimitEntry = {
 
 const store = new Map<string, RateLimitEntry>();
 
-// Periodically sweep expired entries to prevent memory leak
-setInterval(() => {
+// Periodically sweep expired entries to prevent memory leak.
+// .unref() 让定时器不阻塞 Node 进程退出（CI/测试时 vitest 才能干净退出）
+const sweepTimer = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of store) {
     if (entry.resetAt <= now) {
@@ -23,6 +24,7 @@ setInterval(() => {
     }
   }
 }, 60_000);
+sweepTimer.unref();
 
 export function createRateLimiter(options: {
   windowMs: number;

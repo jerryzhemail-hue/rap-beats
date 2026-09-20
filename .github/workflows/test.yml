@@ -70,6 +70,10 @@ jobs:
 
       - name: Run vitest (全量测试，自包含无需 seed)
         working-directory: server
+        env:
+          # beatmaker 加密密钥（CI 占位，固定 32+ 字符，提交到仓库不算秘密）
+          BEATMAKER_IDCARD_KEY: ci-beatmaker-idcard-key-please-rotate-in-real-prod
+          BEATMAKER_IDCARD_PEPPER: ci-beatmaker-idcard-pepper-please-rotate-in-real-prod
         run: npm test
 
   frontend-build:

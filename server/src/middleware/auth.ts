@@ -27,7 +27,7 @@ type TokenPayload = {
 };
 
 /** 从 Authorization header 或 ?token= query 参数中提取原始 JWT 字符串。 */
-function extractToken(req: Request): string | null {
+export function extractToken(req: Request): string | null {
   let raw = req.headers.authorization?.replace('Bearer ', '');
   if (!raw && req.query.token) {
     const q = req.query.token;
@@ -57,7 +57,8 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
   const token = extractToken(req);
   if (!token) return res.status(401).json({ error: '请先登录' });
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as unknown as TokenPayload;
+    // 显式指定算法：防止 algorithm confusion 攻击（攻击者用 RS256 公钥伪造 token）
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as unknown as TokenPayload;
     const user = await resolveCurrentUserFromToken(decoded);
     if (!user) return res.status(401).json({ error: '登录状态已失效，请重新登录' });
     req.user = user;
@@ -72,7 +73,7 @@ export async function requireAdmin(req: AuthRequest, res: Response, next: NextFu
   const token = extractToken(req);
   if (!token) return res.status(401).json({ error: '请先登录' });
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as unknown as TokenPayload;
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as unknown as TokenPayload;
     const user = await resolveCurrentUserFromToken(decoded);
     if (!user || user.role !== 'admin') {
       return res.status(403).json({ error: '需要管理员权限' });
@@ -89,7 +90,7 @@ export async function optionalAuth(req: AuthRequest, _res: Response, next: NextF
   const token = extractToken(req);
   if (!token) { next(); return; }
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as unknown as TokenPayload;
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as unknown as TokenPayload;
     const user = await resolveCurrentUserFromToken(decoded);
     if (user) req.user = user;
   } catch {

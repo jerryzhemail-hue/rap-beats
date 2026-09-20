@@ -49,10 +49,14 @@ services:
       DB_PASSWORD: test_root_2024
       DB_NAME: rap_beats_test
       FORUM_DB_NAME: rap_beats_test_forum
+      MEMBERSHIP_DB_NAME: rap_beats_test_membership
       JWT_SECRET: test-jwt-secret-0123456789abcdef0123456789abcdef
+      BEATMAKER_IDCARD_KEY: test-beatmaker-idcard-key-please-rotate-in-real-prod-32+chars
+      BEATMAKER_IDCARD_PEPPER: test-beatmaker-idcard-pepper-please-rotate-in-real-prod-32+chars
       STORAGE_DRIVER: local
       BASE_URL: http://localhost:8080
       CLIENT_URL: http://localhost:8080
+      TZ: Asia/Shanghai
       XUNHU_APPID: ""
       XUNHU_APPSECRET: ""
       MOCK_PAYMENT_ENABLED: "true"

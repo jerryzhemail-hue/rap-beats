@@ -273,15 +273,30 @@ export function loadConfig(): AppConfig {
   }
 
   // ── Auth
+  // dev 默认 JWT_SECRET 黑名单：这些值在生产部署中绝不能被使用。
+  // 任一出现即 fail-fast，防止密钥缺失时静默回退到可猜的默认值。
+  const FORBIDDEN_JWT_SECRETS = new Set<string>([
+    '',
+    'dev-insecure-secret-do-not-use-in-prod',
+    'change-me',
+    'changeme',
+    'secret',
+    'password',
+  ]);
   const jwtSecret = readEnv('JWT_SECRET');
-  if (!jwtSecret) {
-    if (isProduction) {
-      throw new Error('JWT_SECRET is required in production');
-    }
-    console.warn('[config] WARNING: JWT_SECRET not set, using insecure dev fallback');
+  if (FORBIDDEN_JWT_SECRETS.has(jwtSecret ?? '')) {
+    throw new Error(
+      '[config] JWT_SECRET 未配置或仍为占位默认值。' +
+      '生产环境必须显式设置一个 64 字节随机串（生成方式：node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"）。' +
+      '注意：dev 环境也建议设一个独立的 dev key，避免误用线上示例值。'
+    );
   }
+  if (jwtSecret && jwtSecret.length < 32) {
+    throw new Error('[config] JWT_SECRET 长度不足 32 字符，不安全。');
+  }
+  // 此时 jwtSecret 已通过黑名单校验，必为非空长字符串（auth.ts 也已强制校验）
   const auth = {
-    jwtSecret: jwtSecret || 'dev-insecure-secret-do-not-use-in-prod',
+    jwtSecret: jwtSecret!,
   };
 
   // ── URLs

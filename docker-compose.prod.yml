@@ -78,6 +78,8 @@ services:
       OSS_AUDIO_PREFIX: ${OSS_AUDIO_PREFIX:-audio}
       OSS_COVER_PREFIX: ${OSS_COVER_PREFIX:-covers}
       OSS_AVATAR_PREFIX: ${OSS_AVATAR_PREFIX:-avatars}
+      # 业务时区：与 MySQL 容器对齐，避免日期边界判断漂移
+      TZ: Asia/Shanghai
     depends_on:
       mysql:
         condition: service_healthy

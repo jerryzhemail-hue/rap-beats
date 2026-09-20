@@ -1,5 +1,5 @@
 import { getMembershipDatabaseClient } from '../database/index.js';
-import { getLocalDateString, toDateTimeString } from '../utils/timezone.js';
+import { getLocalDateString, getLocalDateTimeStart, toDateTimeString } from '../utils/timezone.js';
 
 // 积分变动原因枚举
 export type PointReason =
@@ -192,19 +192,30 @@ type PointRewardKey = keyof typeof POINT_REWARDS;
 
 /**
  * 查询某用户在当天通过某行为已获得多少积分
+ *
+ * 实现：用 [今天00:00, 明天00:00) 闭开区间比较，避免依赖 DATE() 函数
+ * 对 created_at 的字面值解析（后者容易和服务器时区耦合）。
+ * 要求服务器 TZ=Asia/Shanghai（docker compose / Dockerfile 已统一设置）。
  */
 export async function getTodayPointsByReason(
   userId: number,
   reason: PointRewardKey
 ): Promise<number> {
   const db = getMembershipDatabaseClient();
-  // 统一使用本地时区的今天
+  const todayStart = getLocalDateTimeStart();
+  // 明天 00:00:00 = 今天 00:00 + 1 day，避开 Date 对象在跨时区的歧义
   const today = getLocalDateString();
+  const [y, m, d] = today.split('-').map(Number);
+  const tomorrow = (() => {
+    const dt = new Date(Date.UTC(y, m - 1, d + 1));
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())} 00:00:00`;
+  })();
   const row = await db.queryOne<{ total: number }>(
     `SELECT COALESCE(SUM(\`change\`), 0) as total
      FROM point_transactions
-     WHERE user_id = ? AND reason = ? AND DATE(created_at) = ?`,
-    [userId, reason, today]
+     WHERE user_id = ? AND reason = ? AND created_at >= ? AND created_at < ?`,
+    [userId, reason, todayStart, tomorrow]
   );
   return row?.total ?? 0;
 }

@@ -1,6 +1,6 @@
 import { AuthRequest } from './auth.js';
 import { getDatabaseClient, getMembershipDatabaseClient } from '../database/client.js';
-import { getLocalDateString } from '../utils/timezone.js';
+import { getLocalDateString, getLocalDateTimeStart } from '../utils/timezone.js';
 
 export type VipLevel = 'free' | 'basic' | 'premium' | 'ultimate';
 export const FREE_PREVIEW_DURATION_SECONDS = 40;
@@ -154,29 +154,31 @@ export async function checkVipStatus(req: AuthRequest): Promise<boolean> {
 }
 
 export async function getDailyDownloadCount(userId: number): Promise<number> {
-  // 统一使用本地时区
-  const today = getLocalDateString();
+  // 统一使用本地时区（[今天 00:00:00, 明天 00:00:00) 半开区间，避免依赖服务器时区）
+  const todayStart = getLocalDateTimeStart();
+  const tomorrowStart = getLocalDateTimeStartTomorrow();
   const database = getDatabaseClient();
   const result = await database.queryOne<{ count: number }>(
-    'SELECT COUNT(*) as count FROM downloads WHERE user_id = ? AND created_at >= ?',
-    [userId, today + ' 00:00:00']
+    'SELECT COUNT(*) as count FROM downloads WHERE user_id = ? AND created_at >= ? AND created_at < ?',
+    [userId, todayStart, tomorrowStart]
   );
   return result?.count ?? 0;
 }
 
 export async function getDailyPreviewTrackCount(userId: number): Promise<number> {
   // 统一使用本地时区
-  const today = getLocalDateString();
+  const todayStart = getLocalDateTimeStart();
+  const tomorrowStart = getLocalDateTimeStartTomorrow();
   const database = getDatabaseClient();
   const result = await database.queryOne<{ count: number }>(
-    'SELECT COUNT(*) as count FROM preview_history WHERE user_id = ? AND preview_date = ?',
-    [userId, today]
+    'SELECT COUNT(*) as count FROM preview_history WHERE user_id = ? AND preview_date = ? AND created_at >= ? AND created_at < ?',
+    [userId, todayStart, todayStart, tomorrowStart]
   );
   return result?.count ?? 0;
 }
 
 export async function hasPreviewedBeatToday(userId: number, beatId: number): Promise<boolean> {
-  // 统一使用本地时区
+  // 统一使用本地时区（与 getDailyPreviewTrackCount 一致）
   const today = getLocalDateString();
   const database = getDatabaseClient();
   const result = await database.queryOne<{ id: number }>(
@@ -184,6 +186,18 @@ export async function hasPreviewedBeatToday(userId: number, beatId: number): Pro
     [userId, beatId, today]
   );
   return Boolean(result);
+}
+
+/**
+ * 上海时区"明天 00:00:00"的 DATETIME 字符串。
+ * 用于"今天"上限比较（与 getLocalDateTimeStart 配对，半开区间）。
+ */
+function getLocalDateTimeStartTomorrow(): string {
+  const today = getLocalDateString();
+  const [y, m, d] = today.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + 1));
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())} 00:00:00`;
 }
 
 export async function recordPreviewAccess(

@@ -9,17 +9,17 @@ type TokenPayload = {
   is_beatmaker?: number;
 };
 
+/**
+ * 复用 auth.ts 的 extractToken 抽象，避免重复实现带来的偏差。
+ * 这样 ?token=xxx 与 Authorization header 在所有认证中间件里行为一致。
+ */
+import { extractToken } from './auth.js';
+
 async function resolveUser(req: AuthRequest): Promise<TokenPayload | null> {
-  const raw = req.headers.authorization?.replace('Bearer ', '');
-  if (!raw && req.query.token) {
-    const q = req.query.token;
-    if (typeof q === 'string') req.headers.authorization = `Bearer ${q}`;
-    else if (Array.isArray(q) && typeof q[0] === 'string') req.headers.authorization = `Bearer ${q[0]}`;
-  }
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = extractToken(req);
   if (!token) return null;
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as unknown as TokenPayload;
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as unknown as TokenPayload;
     const db = getDatabaseClient();
     const user = await db.queryOne<TokenPayload>(
       'SELECT id, role, is_beatmaker FROM users WHERE id = ?',

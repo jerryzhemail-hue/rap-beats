@@ -44,6 +44,11 @@ USER nodeapp
 
 EXPOSE 3000
 
+# 业务时区：项目统一使用 Asia/Shanghai。所有 toDateTimeString / DATE() 比较都依赖此值。
+# 不设此项时 Node 容器默认 UTC，会与 MySQL 容器的 TZ 不一致，导致签到/每日积分
+# 在跨日（北京时间 08:00 / UTC 00:00）出现"昨天与今天混算"的 bug。
+ENV TZ=Asia/Shanghai
+
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1

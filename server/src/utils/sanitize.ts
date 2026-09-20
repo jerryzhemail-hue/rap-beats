@@ -1,6 +1,15 @@
 /**
  * HTML 安全过滤工具
- * 
+ *
+ * ⚠️ TODO(security): 当前是基于正则的「白名单 + 危险模式剥离」手写 sanitizer。
+ * 自研 HTML sanitizer 几乎不可避免有 edge-case bypass（例如 mutation XSS、
+ * Unicode normalization、SVG 命名空间注入等）。生产环境的富文本展示
+ * 应替换为成熟方案，例如 isomorphic-dompurify（在 Node 端用 jsdom + DOMPurify）。
+ * 在替换前：
+ *   - 不要把 sanitizeHtml 的输出用于 HTML 属性值
+ *   - 不要在服务端拼接内联样式 / 事件属性
+ *   - 前端必须再过一次 DOMPurify
+ *
  * 采用白名单策略：只允许一小部分安全标签和属性，
  * 移除所有脚本、事件处理器和危险内容。
  */
