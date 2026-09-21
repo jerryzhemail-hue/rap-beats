@@ -296,6 +296,13 @@ router.put('/user/password', requireAuth, rateLimitMiddleware('password-change',
 
   const hash = bcrypt.hashSync(newPassword, 10);
   await database.execute('UPDATE users SET password_hash = ? WHERE id = ?', [hash, userId]);
+
+  // 改密后撤销该用户所有 refresh token，防止攻击者用旧 token 冒充
+  await database.execute(
+    'UPDATE refresh_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL',
+    [userId]
+  );
+
   res.json({ message: '密码修改成功' });
 });
 

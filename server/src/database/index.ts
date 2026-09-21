@@ -72,6 +72,30 @@ async function runInit(
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
+  // ─── Auth token 表（refresh tokens + token 黑名单） ──────────────────────
+  // 用于支持 logout（token 黑名单）和 refresh token 轮换。
+  // revoked_tokens: SHA-256(token) 作为主键，存储过期时间便于自动清理。
+  // refresh_tokens: 一次性 refresh token，used_at 非空表示已使用。
+  await migrate(998, 'auth_refresh_and_revoked_tokens', [
+    `CREATE TABLE IF NOT EXISTS revoked_tokens (
+      token_hash VARCHAR(64) PRIMARY KEY,
+      expires_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_revoked_expires (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    `CREATE TABLE IF NOT EXISTS refresh_tokens (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      token_hash VARCHAR(64) NOT NULL UNIQUE,
+      expires_at DATETIME NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      used_at DATETIME NULL,
+      INDEX idx_refresh_user (user_id),
+      INDEX idx_refresh_expires (expires_at),
+      CONSTRAINT fk_refresh_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  ]);
+
   // 幂等迁移执行器：version 已应用则跳过；
   // alreadyApplied 用于兼容历史库（列已存在但未记录版本时，直接标记为已应用）。
   // 实现约定：传「期望存在的列名集合」，只有全部都存在才视为已应用 —— 这样既能识别
