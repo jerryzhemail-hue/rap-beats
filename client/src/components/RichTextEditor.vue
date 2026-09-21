@@ -91,9 +91,25 @@ function handleImageUpload(file: File, url: string) {
 }
 
 // 在光标位置插入图片
+// 安全检查：仅允许 https/http 协议 URL，防止 javascript:/data:text/html 等 XSS payload
+// 通过 insertHTML 直接写入 DOM（即使后续 sanitizeHtml 也会过滤，但编辑期间不应注入）
 function insertImageToContent(url: string) {
+  if (!url || typeof url !== 'string') return;
+
+  // 协议白名单：仅允许 https/http 显式协议（不允许 javascript:、data:、vbscript: 等）
+  // 相对路径（/uploads/xxx）也允许（站内资源）
+  const trimmed = url.trim();
+  const isAbsolute = /^[a-z][a-z0-9+.-]*:/i.test(trimmed);
+  if (isAbsolute && !/^https?:/i.test(trimmed)) {
+    console.warn('[RichTextEditor] 已拒绝非 http(s) 协议的图片 URL:', trimmed.slice(0, 64));
+    return;
+  }
+
+  // 防御性地转义引号（即使协议安全，避免属性边界被注入）
+  const safeUrl = trimmed.replace(/"/g, '%22').replace(/>/g, '%3E').replace(/</g, '%3C');
+
   editorRef.value?.focus()
-  document.execCommand('insertHTML', false, `<img src="${url}" alt="图片" class="content-image" />`)
+  document.execCommand('insertHTML', false, `<img src="${safeUrl}" alt="图片" class="content-image" />`)
 }
 
 // 暴露给父组件的插入图片方法

@@ -22,6 +22,7 @@ import {
   invalidateVipCache,
 } from './forum-common.js';
 import fs from 'fs';
+import crypto from 'crypto';
 
 const router = createForumRouter();
 
@@ -408,9 +409,9 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
     });
     costDeducted = true;
 
-    // 根据权重随机抽取奖品
+    // 根据权重随机抽取奖品（密码学安全随机，避免 Math.random 可被预测）
     const totalWeight = LOTTERY_PRIZES.reduce((sum, p) => sum + p.weight, 0);
-    let rand = Math.random() * totalWeight;
+    let rand = crypto.randomInt(0, totalWeight);
     let selectedPrize = LOTTERY_PRIZES[0];
 
     for (const prize of LOTTERY_PRIZES) {

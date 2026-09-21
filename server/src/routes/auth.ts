@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { requireAuth, AuthRequest, JWT_SECRET } from '../middleware/auth.js';
 import { getDatabaseClient } from '../database/client.js';
 import { getEffectiveVipLevel } from '../middleware/vip.js';
-import { validateUsername, validateEmail } from '../utils/validation.js';
+import { validateUsername, validateEmail, validatePassword } from '../utils/validation.js';
 import { serializeUserAssets } from '../utils/assets.js';
 import { createRateLimiter } from '../middleware/rateLimit.js';
 
@@ -110,9 +110,8 @@ router.post('/register', registerLimiter, async (req, res) => {
   if (usernameErr) return res.status(400).json({ error: usernameErr });
   const emailErr = validateEmail(email);
   if (emailErr) return res.status(400).json({ error: emailErr });
-  if (password.length < 6) {
-    return res.status(400).json({ error: '密码至少需要6位' });
-  }
+  const passwordErr = validatePassword(password);
+  if (passwordErr) return res.status(400).json({ error: passwordErr });
 
   const database = getDatabaseClient();
   const existingUser = await database.queryOne<{ id: number }>(

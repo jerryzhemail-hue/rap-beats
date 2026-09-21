@@ -48,7 +48,7 @@ function getOrCreateAnonymousSessionId(req: Request, res: Response): string {
     const secure = req.protocol === 'https' ? '; Secure' : '';
     res.setHeader(
       'Set-Cookie',
-      `${ANONYMOUS_SESSION_COOKIE}=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`
+      `${ANONYMOUS_SESSION_COOKIE}=${sessionId}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`
     );
   }
 
