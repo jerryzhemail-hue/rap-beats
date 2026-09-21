@@ -145,7 +145,8 @@ function getDownloadFileName(beat: BeatRecord): string {
     ? new URL(beat.file_path.startsWith('//') ? `https:${beat.file_path}` : beat.file_path).pathname
     : beat.file_path;
   const ext = path.extname(rawSource) || '.mp3';
-  const safeTitle = beat.title.replace(/[\\/:*?"<>|]/g, '_').trim() || `beat-${beat.id}`;
+  // 同时过滤控制字符（\r\n）和文件名保留字符，防止响应拆分注入 + 文件名歧义
+  const safeTitle = beat.title.replace(/[\r\n\x00]/g, '').replace(/[\\/:*?"<>|]/g, '_').trim() || `beat-${beat.id}`;
   return `${safeTitle}${ext}`;
 }
 

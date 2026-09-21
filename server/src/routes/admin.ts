@@ -283,18 +283,51 @@ router.post('/admin/maintenance/clear-test-users', requireAdmin, async (_req: Au
 
   const adminId = adminUser.id;
 
-  await database.transaction(async (tx) => {
-    await tx.execute("DELETE FROM favorites WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
-    await tx.execute("DELETE FROM comments WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
-    await tx.execute("DELETE FROM downloads WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
-    await tx.execute("DELETE FROM play_events WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
-    await tx.execute("DELETE FROM preview_history WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
-    await tx.execute("DELETE FROM feedback WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
-    await tx.execute("DELETE FROM orders WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
-    await tx.execute("DELETE FROM beat_license_agreements WHERE user_id IN (SELECT id FROM users WHERE role <> 'admin')");
-    await tx.execute("UPDATE beats SET uploaded_by = NULL WHERE uploaded_by IN (SELECT id FROM users WHERE role <> 'admin')");
-    await tx.execute("DELETE FROM users WHERE role <> 'admin'");
-  });
+  // ── 分批清理主库用户数据（避免大批 DELETE 长时间锁表） ─────────
+  // 每次最多删 500 行；每批之间短暂 sleep 让其他事务得以推进。
+  const BATCH_SIZE = 500;
+  const SLEEP_MS = 50;
+  const sleep = () => new Promise<void>(r => setTimeout(r, SLEEP_MS));
+
+  async function deleteInBatches(table: string, userIdColumn: string) {
+    for (;;) {
+      const result = await database.execute(
+        `DELETE FROM ${table} WHERE ${userIdColumn} IN (SELECT id FROM users WHERE role <> 'admin' LIMIT ?)`,
+        [BATCH_SIZE]
+      );
+      if (result.affectedRows < BATCH_SIZE) break;
+      await sleep();
+    }
+  }
+
+  await deleteInBatches('favorites', 'user_id');
+  await deleteInBatches('comments', 'user_id');
+  await deleteInBatches('downloads', 'user_id');
+  await deleteInBatches('play_events', 'user_id');
+  await deleteInBatches('preview_history', 'user_id');
+  await deleteInBatches('feedback', 'user_id');
+  await deleteInBatches('orders', 'user_id');
+  await deleteInBatches('beat_license_agreements', 'user_id');
+
+  // 解除上传者引用（无外键约束，分批避免长锁）
+  for (;;) {
+    const result = await database.execute(
+      `UPDATE beats SET uploaded_by = NULL WHERE uploaded_by IN (SELECT id FROM users WHERE role <> 'admin' LIMIT ?)`,
+      [BATCH_SIZE]
+    );
+    if (result.affectedRows < BATCH_SIZE) break;
+    await sleep();
+  }
+
+  // 最后清理 users 本体（分批）
+  for (;;) {
+    const result = await database.execute(
+      `DELETE FROM users WHERE role <> 'admin' LIMIT ?`,
+      [BATCH_SIZE]
+    );
+    if (result.affectedRows < BATCH_SIZE) break;
+    await sleep();
+  }
 
   // 清理论坛库 + 会员库孤儿数据
   await forumDb.execute("DELETE FROM forum_posts WHERE user_id <> ?", [adminId]);

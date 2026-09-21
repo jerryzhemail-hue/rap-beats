@@ -21,11 +21,43 @@ const heartbeatMap = new Map<SseResponse, NodeJS.Timeout>();
 
 const HEARTBEAT_INTERVAL_MS = 25_000;
 
+/** 每个用户最大 SSE 连接数（防止同一账号多设备/脚本滥用） */
+const MAX_CONNECTIONS_PER_USER = 3;
+/** 全局最大 SSE 连接总数（防止单进程内存耗尽） */
+const MAX_TOTAL_CONNECTIONS = 10_000;
+
+/** 当前全局连接计数 */
+let totalConnectionCount = 0;
+
 /**
  * 注册一个用户的 SSE 连接到连接池。
  * 设置 SSE 响应头、启动心跳保活，并返回清理函数。
+ *
+ * 连接数限制：
+ * - 单用户最多 MAX_CONNECTIONS_PER_USER 个连接（超出则关闭最早的）
+ * - 全局最多 MAX_TOTAL_CONNECTIONS 个连接（超出则返回 503）
  */
 export function addClient(userId: number, res: SseResponse): void {
+  // ── 全局连接数上限（防止内存耗尽 DoS） ──────────────────────────
+  if (totalConnectionCount >= MAX_TOTAL_CONNECTIONS) {
+    res.writeHead(503, { 'Content-Type': 'text/plain' });
+    res.end('Service temporarily unavailable\n');
+    return;
+  }
+
+  // ── 单用户连接数上限（超出则关闭最早的，释放资源） ─────────────
+  let set = clientMap.get(userId);
+  if (!set) {
+    set = new Set();
+    clientMap.set(userId, set);
+  } else if (set.size >= MAX_CONNECTIONS_PER_USER) {
+    // 关闭最早的连接（Iterator 第一个）
+    const oldest = set.values().next().value as SseResponse | undefined;
+    if (oldest) {
+      removeClient(userId, oldest);
+    }
+  }
+
   // SSE 响应头：保持长连接、禁用代理缓冲、声明事件流
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -34,12 +66,8 @@ export function addClient(userId: number, res: SseResponse): void {
     'X-Accel-Buffering': 'no',
   });
 
-  let set = clientMap.get(userId);
-  if (!set) {
-    set = new Set();
-    clientMap.set(userId, set);
-  }
   set.add(res);
+  totalConnectionCount++;
 
   // 心跳：发送注释行，保持连接活跃，避免代理层超时断开
   const timer = setInterval(() => {
@@ -64,6 +92,7 @@ export function removeClient(userId: number, res: SseResponse): void {
   const set = clientMap.get(userId);
   if (!set) return;
   set.delete(res);
+  totalConnectionCount = Math.max(0, totalConnectionCount - 1);
   if (set.size === 0) clientMap.delete(userId);
 }
 
@@ -96,10 +125,23 @@ export function pushToUser(userId: number, event: string, data: unknown): number
 /**
  * 向单个 SSE 连接写入一个标准事件。
  * 格式：event: <event>\ndata: <json>\n\n
+ *
+ * 防御：推送数据上限 1MB，防止恶意消息撑爆客户端。
  */
+const MAX_EVENT_PAYLOAD_BYTES = 1 * 1024 * 1024;
+
 function writeEvent(res: SseResponse, event: string, data: unknown): void {
+  const payload = JSON.stringify(data);
+  if (payload.length > MAX_EVENT_PAYLOAD_BYTES) {
+    // 截断而非丢弃，保留事件类型便于调试
+    console.warn(`[messageEvents] 消息体超过 ${MAX_EVENT_PAYLOAD_BYTES} 字节，已截断`);
+    const truncated = payload.slice(0, MAX_EVENT_PAYLOAD_BYTES - 3) + '..."';
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${truncated}\n\n`);
+    return;
+  }
   res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
+  res.write(`data: ${payload}\n\n`);
 }
 
 /**

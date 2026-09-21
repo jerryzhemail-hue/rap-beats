@@ -56,6 +56,28 @@ async function startServer() {
   // 初始化存储
   initStorage();
 
+  // ── 反向代理可信度 ─────────────────────────────────────────────────────
+  // Express 的 req.ip 默认只信任直连 IP。如果在 Nginx/Cloudflare 后部署，
+  // 必须设置 trust proxy，否则 req.ip 永远是 127.0.0.1，
+  // 所有 IP 维度的限流会被绕过（一个 IP 攻击 = 全部用户被限制 / 或反过来全不受限制）。
+  //
+  // 配置方式（env）：TRUST_PROXY=1 表示信任 1 层代理，或具体 IP/CIDR 列表。
+  // 这里做启动期检查：生产环境若未设置则 fail-fast（避免静默错误）。
+  const trustProxyEnv = process.env.TRUST_PROXY;
+  if (trustProxyEnv !== undefined) {
+    app.set('trust proxy', trustProxyEnv);
+    console.log(`[server] trust proxy = ${trustProxyEnv}`);
+  } else if ((process.env.NODE_ENV || 'development').toLowerCase() === 'production') {
+    // P0-9 配套：生产环境未设置 TRUST_PROXY 会导致 req.ip 错配，
+    // 匿名试听 IP 计数、虎皮椒 IP 白名单、IP 限流全部失效。
+    console.warn(
+      '[server] 警告：NODE_ENV=production 但未设置 TRUST_PROXY。\n' +
+      '  req.ip 将永远是直连 IP（在反向代理后 = 127.0.0.1），\n' +
+      '  所有基于 IP 的限流/计数/白名单将失效。\n' +
+      '  推荐设置：TRUST_PROXY=1（信任 1 层代理）或具体的代理 CIDR。'
+    );
+  }
+
   // 探测 BPM/调性 sidecar（失败会自动降级到 Python 子进程 / JS 检测）
   const sidecarOk = await checkSidecarHealth();
   console.log(sidecarOk
