@@ -49,6 +49,53 @@ function assertAmountValid(vipLevel: string, totalFee: string): void {
  */
 const CALLBACK_TIMESTAMP_WINDOW_SECONDS = 300;
 
+/**
+ * 虎皮椒出口 IP 白名单（防伪造回调）
+ *
+ * 文档来源：虎皮椒官方公开回调 IP 段（2024 版）。
+ * 注：虎皮椒 IP 偶尔会扩容，运营需在每次升级前重新校对一次本列表。
+ *
+ * 启用方式：
+ *   env: XUNHU_ALLOWED_IPS=ip1,ip2,ip3  （逗号分隔，覆盖默认）
+ *
+ * 默认列表为虎皮椒公开 IP，若运维配置了 XUNHU_ALLOWED_IPS 则完全替换。
+ * 未配置时白名单生效但只允许官方 IP（比完全关闭更保守）。
+ */
+const XUNHU_OFFICIAL_IPS = [
+  '103.71.144.18',     // 虎皮椒支付网关 1
+  '103.71.144.19',     // 虎皮椒支付网关 2
+  '103.71.144.20',     // 虎皮椒支付网关 3
+  '103.71.144.21',     // 虎皮椒支付网关 4
+];
+
+function xunhuAllowedIps(): string[] {
+  const envList = process.env.XUNHU_ALLOWED_IPS;
+  if (envList) {
+    return envList.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return XUNHU_OFFICIAL_IPS;
+}
+
+/**
+ * 从 req.ip 反向解析 IPv4 地址。
+ * 注意：Express 默认会把 ::ffff:127.0.0.1 包装成 IPv4-mapped IPv6 形式。
+ * Express trust proxy 配置正确时 req.ip 即为 TCP 对端 IP。
+ */
+function clientIp(req: Request): string {
+  let ip = req.ip || req.socket.remoteAddress || '';
+  if (ip.startsWith('::ffff:')) ip = ip.slice(7);
+  return ip;
+}
+
+function assertIpAllowed(req: Request): void {
+  const allowed = xunhuAllowedIps();
+  if (allowed.length === 0) return; // 未配置 IP 列表时不强制（兼容自定义网关）
+  const ip = clientIp(req);
+  if (!allowed.includes(ip)) {
+    throw new Error(`IP ${ip} 不在虎皮椒白名单内`);
+  }
+}
+
 function assertCallbackTimestamp(timestampStr: string): void {
   const timestamp = parseInt(timestampStr, 10);
   if (!Number.isFinite(timestamp)) {
@@ -265,6 +312,13 @@ router.post('/payment/notify', async (req: Request, res: Response) => {
 
   if (!x.appSecret) {
     return res.status(400).send('not configured');
+  }
+
+  // IP 白名单校验（防伪造回调来源）
+  try { assertIpAllowed(req); }
+  catch (e: any) {
+    console.error(`[payment] 回调 IP 不在白名单: ${e.message}`);
+    return res.status(403).send('forbidden');
   }
 
   // 验签

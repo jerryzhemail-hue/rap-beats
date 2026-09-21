@@ -336,11 +336,20 @@ export function loadConfig(): AppConfig {
   };
 
   // ── Xunhu
+  const mockPaymentEnabled = readEnvBool('MOCK_PAYMENT_ENABLED', false);
+  // P0-10: 模拟支付在生产环境强校验 — 双重锁（启动期就 fail-fast，不依赖运行时调用）
+  if (mockPaymentEnabled && env === 'production') {
+    throw new Error(
+      '[config] MOCK_PAYMENT_ENABLED=true 不允许在 NODE_ENV=production 下使用。\n' +
+      '  这会绕过真实支付校验，使任何已登录用户可免费开通 VIP。\n' +
+      '  请在生产环境使用真实虎皮椒密钥（XUNHU_APPID / XUNHU_APPSECRET）。'
+    );
+  }
   const xunhu = {
     appId: readEnv('XUNHU_APPID') || '',
     appSecret: readEnv('XUNHU_APPSECRET') || '',
     gateway: readEnv('XUNHU_GATEWAY') || 'https://api.xunhupay.com/payment/do.html',
-    mockEnabled: readEnvBool('MOCK_PAYMENT_ENABLED', false),
+    mockEnabled: mockPaymentEnabled,
   };
 
   // ── Features

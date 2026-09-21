@@ -39,10 +39,11 @@
   ],
   "ssh": {
     "enabled": false,
-    "user": "root",
+    "user": "<YOUR_SSH_USER>",
     "host": "<YOUR_SERVER_IP>",
     "port": 22,
     "deployDir": "/opt/rap-beats",
+    "keyPath": "/path/to/private/key",
     "timeoutMs": 15000,
     "logTail": 80
   },

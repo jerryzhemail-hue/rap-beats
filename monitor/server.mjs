@@ -13,11 +13,29 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const ERROR_RE = /\b(error|fatal|exception|throw|unhandled|rejection|crash|panic|failed|denied|refused|invalid|timeout|econnrefused|eaddrinuse|eacces|enospc|oom|killed|uncaught)\b|\b(5\d\d)\b/i;
 
 // ── 配置 ────────────────────────────────────────────────────────────────
+//
+// 加载顺序（后置覆盖前置）：
+// 1. config.json  基础配置（端口、检测目标、日志路径等）
+// 2. MONITOR_*    环境变量覆盖敏感/部署相关的字段（SSH host/IP 等）
+//
+// 设计动机：把 SSH host、服务器 IP 这些"半秘密"信息从 git 里移走。
+// 运维把 config.example.json 复制成本地 config.json 后，用 MONITOR_SSH_HOST 等
+// 环境变量注入真实值。
 function loadConfig() {
   const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
   const cfg = JSON.parse(raw);
   cfg.fastIntervalSec = cfg.fastIntervalSec || 15;
   cfg.slowIntervalSec = cfg.slowIntervalSec || 60;
+
+  // SSH 配置：env 覆盖 json，缺省值留空让运行期报错
+  if (cfg.ssh) {
+    cfg.ssh.host = process.env.MONITOR_SSH_HOST || cfg.ssh.host || '';
+    cfg.ssh.user = process.env.MONITOR_SSH_USER || cfg.ssh.user || '';
+    cfg.ssh.port = parseInt(process.env.MONITOR_SSH_PORT || cfg.ssh.port || '22', 10);
+    cfg.ssh.deployDir = process.env.MONITOR_SSH_DEPLOY_DIR || cfg.ssh.deployDir || '/opt/rap-beats';
+    cfg.ssh.keyPath = process.env.MONITOR_SSH_KEY_PATH || cfg.ssh.keyPath || '';
+  }
+
   return cfg;
 }
 const config = loadConfig();
@@ -127,8 +145,14 @@ function tcpCheck(t) {
 
 function sshArgs() {
   const s = config.ssh;
-  return ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=accept-new',
-    '-p', String(s.port || 22), `${s.user}@${s.host}`];
+  const args = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=accept-new',
+    '-p', String(s.port || 22)];
+  // 优先用 env 注入的私钥路径（更安全，比 SSH 默认 ~/.ssh/id_rsa 更可控）
+  if (s.keyPath) {
+    args.push('-i', s.keyPath);
+  }
+  args.push(`${s.user}@${s.host}`);
+  return args;
 }
 
 async function sshRun(remoteCmd) {

@@ -20,6 +20,7 @@
     "migrate-local-assets-to-oss": "node --import tsx/esm src/scripts/migrate-local-assets-to-oss.ts",
     "sanitize-forum": "node --import tsx/esm src/scripts/sanitize-forum-data.ts",
     "seed-forum": "node --import tsx/esm src/scripts/seed-forum-data.ts",
+    "reconcile-lottery-vip": "node --import tsx/esm src/scripts/reconcile-lottery-vip.ts",
     "test-forum": "node --import tsx/esm src/scripts/test-forum-messages.ts",
     "test-membership": "node --import tsx/esm src/scripts/test-membership.ts",
     "build": "tsc && cp src/scripts/detect_bpm.py dist/scripts/detect_bpm.py",
