@@ -21,6 +21,8 @@ type SaveBufferOptions = {
   originalName?: string;
   fileNamePrefix?: string;
   extension?: string;
+  /** 单次上传最大字节数，超过则拒绝（默认 50MB） */
+  maxSizeBytes?: number;
 };
 
 type DirectUploadOptions = {
@@ -82,14 +84,35 @@ function isRemoteUrl(value: string): boolean {
   return /^https?:\/\//i.test(value) || value.startsWith('//');
 }
 
-function normalizeExtension(originalName?: string, explicitExtension?: string): string {
+/** 每种 StorageKind 允许的文件扩展名（防御客户端伪造扩展名） */
+const ALLOWED_EXTENSIONS: Record<StorageKind, readonly string[]> = {
+  audio:           ['.mp3', '.wav', '.aac', '.ogg', '.flac', '.m4a', '.aiff'],
+  cover:           ['.jpg', '.jpeg', '.png', '.webp', '.gif'],
+  avatar:          ['.jpg', '.jpeg', '.png', '.webp', '.gif'],
+  banner:          ['.jpg', '.jpeg', '.png', '.webp', '.gif'],
+  forum_image:     ['.jpg', '.jpeg', '.png', '.webp', '.gif'],
+  forum_audio:     ['.mp3', '.wav', '.aac', '.ogg', '.flac', '.m4a', '.aiff'],
+  forum_video:     ['.mp4', '.webm', '.mov', '.avi', '.mkv'],
+  forum_video_cover: ['.jpg', '.jpeg', '.png', '.webp', '.gif'],
+};
+
+/** 默认最大上传字节数（50MB） */
+const DEFAULT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
+
+function normalizeExtension(kind: StorageKind, originalName?: string, explicitExtension?: string): string {
   const ext = explicitExtension || (originalName ? path.extname(originalName) : '');
   if (!ext) return '';
-  return ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
+  const normalized = (ext.startsWith('.') ? ext : `.${ext}`).toLowerCase();
+  // 扩展名白名单校验（防止恶意伪装：evil.php.jpg）
+  const allowed = ALLOWED_EXTENSIONS[kind];
+  if (!allowed.includes(normalized)) {
+    throw new Error(`不支持的文件类型 "${normalized}"，允许的类型：${allowed.join(', ')}`);
+  }
+  return normalized;
 }
 
 function createFileName(kind: StorageKind, originalName?: string, explicitExtension?: string, fileNamePrefix?: string): string {
-  const ext = normalizeExtension(originalName, explicitExtension);
+  const ext = normalizeExtension(kind, originalName, explicitExtension);
   const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
   const prefix = fileNamePrefix || kind;
   return `${prefix}-${uniqueSuffix}${ext}`;
@@ -219,6 +242,13 @@ export function initStorage(): void {
 
 export async function saveBuffer(kind: StorageKind, options: SaveBufferOptions): Promise<{ storedValue: string; publicUrl: string }> {
   const driver = getStorageDriver();
+
+  // ── 文件大小校验（防止磁盘耗尽 DoS） ───────────────────────────────
+  const maxBytes = options.maxSizeBytes ?? DEFAULT_MAX_SIZE_BYTES;
+  if (options.buffer.length > maxBytes) {
+    throw new Error(`文件大小超过限制（${Math.round(maxBytes / 1024 / 1024)}MB）`);
+  }
+
   if (driver === 'local') {
     initStorage();
 
@@ -358,8 +388,9 @@ export function getSignedAssetUrl(
       response['content-disposition'] = `attachment; filename="${encodeURIComponent(options.downloadFileName || path.basename(objectKey))}"`;
     }
 
+    const maxExpires = Math.min(options.expiresInSeconds ?? 300, 1800);
     return client.signatureUrl(objectKey, {
-      expires: options.expiresInSeconds || 300,
+      expires: maxExpires,
       response
     });
   }
@@ -383,9 +414,11 @@ export function createDirectUploadTarget(kind: StorageKind, options: DirectUploa
     const client = getOssClient();
     const objectKey = createOssObjectKey(kind, options);
     const contentType = options.contentType || 'application/octet-stream';
+    // 签名有效期上限 30 分钟（即使客户端传更大值也截断）
+    const maxExpires = Math.min(options.expiresInSeconds ?? 600, 1800);
     const uploadUrl = client.signatureUrl(objectKey, {
       method: 'PUT',
-      expires: options.expiresInSeconds || 600,
+      expires: maxExpires,
       'Content-Type': contentType
     });
     const publicUrl = getOssPublicUrl(objectKey);
