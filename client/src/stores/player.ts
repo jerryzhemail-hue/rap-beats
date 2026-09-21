@@ -336,6 +336,29 @@ export const usePlayerStore = defineStore('player', () => {
     isInitialized.value = true
   }
 
+  // ── 登出时调用：重置全部播放状态（logout → 新用户进来时不会看到旧播放状态）
+  function reset() {
+    pause()
+    if (audio) {
+      audio.src = ''
+    }
+    currentBeat.value = null
+    reportedBeatId = null
+    isLooping.value = false
+    isStopped.value = false
+    loopStart.value = null
+    loopEnd.value = null
+    isSettingLoopStart.value = false
+    isSettingLoopEnd.value = false
+    // 游客试听次数重置；登录后会由 initPreviewStatus 重新拉取
+    remainingFreeCount.value = FREE_PREVIEW_LIMIT
+    isInitialized.value = false
+    isPreviewMode.value = false
+    showVipPrompt.value = false
+    showLimitPrompt.value = false
+    // 注意：playlist 保留（用户在播放列表里找到想听的歌是体验加分）
+  }
+
   // 启动初始化
   initPreviewStatus()
 
@@ -363,6 +386,7 @@ export const usePlayerStore = defineStore('player', () => {
     dismissLimitPrompt,
     clearPreview,
     clearPlaylist,
+    reset,
     initPreviewStatus,
     isLooping,
     isStopped,

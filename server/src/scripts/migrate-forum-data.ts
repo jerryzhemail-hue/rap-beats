@@ -31,6 +31,21 @@ if (!MAIN_DB.password) {
   process.exit(1);
 }
 
+// 生产库禁止：rap_beats / rap_beats_forum（含 _prod / _production 等后缀也禁止）
+const FORBIDDEN_SUFFIXES = ['_prod', '_production', '_online', '_live', '_master'];
+for (const [name, cfg] of [[MAIN_DB.database, MAIN_DB], [FORUM_DB.database, FORUM_DB]] as [string, typeof MAIN_DB][]) {
+  if (!name) {
+    console.error(`[migrate-forum-data] ${name === MAIN_DB.database ? 'DB_NAME' : 'FORUM_DB_NAME'} 未设置。`);
+    process.exit(1);
+  }
+  const isForbidden = name === 'rap_beats' || name === 'rap_beats_forum' ||
+    FORBIDDEN_SUFFIXES.some(s => name.includes(s));
+  if (isForbidden) {
+    console.error(`[migrate-forum-data] 检测到疑似生产库 "${name}"，禁止操作！`);
+    process.exit(1);
+  }
+}
+
 interface ForumCategory {
   id: number;
   name: string;

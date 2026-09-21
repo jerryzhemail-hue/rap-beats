@@ -18,11 +18,36 @@ for (const envPath of envCandidates) {
   }
 }
 
+const FORBIDDEN_DB_SUFFIXES = ['_prod', '_production', '_online', '_live', '_master'];
+const env = (process.env.NODE_ENV || 'development').toLowerCase();
+
+if (env === 'production') {
+  console.error('[fill-missing-keys] NODE_ENV=production，禁止执行。');
+  process.exit(1);
+}
+const dbName = process.env.DB_NAME || '';
+if (dbName && (dbName === 'rap_beats' || FORBIDDEN_DB_SUFFIXES.some(s => dbName.includes(s)))) {
+  console.error(`[fill-missing-keys] 检测到疑似生产库 "${dbName}"，拒绝执行。`);
+  process.exit(1);
+}
+
+// 默认 user=root 仅为兼容旧脚本；显式设置 DB_USER 时优先使用
+const dbUser = process.env.DB_USER || 'root';
+const dbPassword = process.env.DB_PASSWORD || '';
+if (!dbPassword) {
+  console.error('[fill-missing-keys] DB_PASSWORD 未设置，无法连接数据库。');
+  process.exit(1);
+}
+if (dbUser === 'root' && !process.env.DB_USER) {
+  console.warn('[fill-missing-keys] 警告：使用默认 root 用户（非生产安全配置）。');
+}
+
 const pool = mysql2.createPool({
   host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'rap_beats',
+  port: parseInt(process.env.DB_PORT || '3306', 10),
+  user: dbUser,
+  password: dbPassword,
+  database: dbName || undefined,
   waitForConnections: true,
   connectionLimit: 1,
 });

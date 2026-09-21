@@ -198,22 +198,27 @@ router.post('/beatmakers/:userId/revoke', requireAdmin, async (req: AuthRequest,
 });
 
 // ─── GET /api/admin/beatmaker-applications/:id ─────────────────
-// 单条详情（含加密身份证号，仅用于审计）
+// 单条详情（身份证仅返回脱敏值，不返回原始加密内容）
 router.get('/:id', requireAdmin, async (req: AuthRequest, res: Response) => {
   const database = getDatabaseClient();
   const id = parseInt(req.params.id as string, 10);
   if (!id || isNaN(id)) return res.status(400).json({ error: '无效的 id' });
 
-  const row = await database.queryOne(
+  const row = await database.queryOne<Record<string, unknown>>(
     `SELECT a.*, u.username, u.email, ru.username AS reviewer_name
        FROM beatmaker_applications a
-       INNER JOIN users u ON u.id = a.user_id
+  INNER JOIN users u ON u.id = a.user_id
        LEFT JOIN users ru ON ru.id = a.reviewed_by
       WHERE a.id = ?`,
     [id]
   );
   if (!row) return res.status(404).json({ error: '申请不存在' });
-  return res.json({ application: row });
+
+  // 身份证只返回脱敏值，不返回原始加密内容，防止 XSS+CSRF 链窃取
+  const idCardRaw = row['id_card_no_enc'] as string | null | undefined;
+  const { id_card_no_enc, ...safeRow } = row;
+  void id_card_no_enc; // 显式丢弃，不再使用
+  return res.json({ application: { ...safeRow, id_card_masked: maskIdCard(idCardRaw || '') } });
 });
 
 // ─── POST /api/admin/beatmaker-applications/:id/approve ────────

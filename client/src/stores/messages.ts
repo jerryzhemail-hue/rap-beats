@@ -39,6 +39,12 @@ type MessageListener = (payload: IncomingMessagePayload) => void
 /** 最小刷新间隔（毫秒），防止 SSE 重连风暴时频繁请求 */
 const REFRESH_THROTTLE_MS = 3000
 
+/** SSE 重连上限（防无限重连风暴） */
+const SSE_RECONNECT_MAX = 5
+/** SSE 初始重连延迟（ms），每次失败翻倍，最长 30s */
+const SSE_RECONNECT_BASE_MS = 1000
+const SSE_RECONNECT_MAX_MS = 30_000
+
 /** 当前 store 实例的唯一标识，用于检测 HMR 导致的模块重新执行 */
 let storeInstanceId = 0
 
@@ -61,6 +67,11 @@ export const useMessagesStore = defineStore('messages', () => {
   let eventSource: EventSource | null = null
   /** 实时消息订阅者集合（MessagesHubView 注册/注销） */
   const messageListeners = new Set<MessageListener>()
+
+  /** SSE 重连计数器（超出上限后停止，提示用户重新登录） */
+  let reconnectCount = 0
+  /** 当前正在等待的重连定时器 */
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   /** 上次调用 refreshUnreadCount 的时间戳，用于节流 */
   let lastRefreshAt = 0
@@ -170,9 +181,33 @@ export const useMessagesStore = defineStore('messages', () => {
 
     eventSource.onerror = () => {
       if (storeInstanceId !== instanceId) return
-      if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+      if (!eventSource || eventSource.readyState === EventSource.CLOSED) {
+        // 连接已关闭，触发一次未读数补偿拉取
         refreshUnreadCount()
+        return
       }
+      // EventSource 的 onerror 在 token 失效（401）时也会触发。
+      // 由于 EventSource 没有 HTTP 状态码，我们只能通过重连计数判断：
+      // 正常网络抖动 → 重连几次后恢复；token 失效 → 一直失败，直到上限。
+      reconnectCount++
+      if (reconnectCount > SSE_RECONNECT_MAX) {
+        console.warn('[messages] SSE 重连超过上限，停止自动重连（token 可能已失效）')
+        eventSource.close()
+        eventSource = null
+        return
+      }
+      // 指数退避：1s → 2s → 4s → 8s → 16s（最多 30s）
+      const delay = Math.min(
+        SSE_RECONNECT_BASE_MS * Math.pow(2, reconnectCount - 1),
+        SSE_RECONNECT_MAX_MS
+      )
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        if (storeInstanceId === instanceId && !eventSource) {
+          connect(token) // 重连时重置 reconnectCount
+        }
+      }, delay)
     }
   }
 
@@ -220,6 +255,11 @@ export const useMessagesStore = defineStore('messages', () => {
       clearTimeout(refreshTimer)
       refreshTimer = null
     }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    reconnectCount = 0
   }
 
   return {

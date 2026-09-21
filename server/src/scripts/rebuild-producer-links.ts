@@ -12,12 +12,22 @@
 import 'dotenv/config';
 import mysql, { RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 
+const FORBIDDEN_DB_SUFFIXES = ['_prod', '_production', '_online', '_live', '_master'];
+
 if (process.env.NODE_ENV === 'production') {
   console.error('❌ rebuild-producer-links 禁止在 NODE_ENV=production 环境下执行');
   process.exit(1);
 }
-if (process.env.DB_NAME === 'rap_beats') {
-  console.error('❌ 检测到生产库名 rap_beats，拒绝执行');
+const dbName = process.env.DB_NAME || '';
+if (!dbName) {
+  console.error('❌ DB_NAME 未设置，无法确认目标库。');
+  process.exit(1);
+}
+// 生产库特征：裸 rap_beats，或含 prod/production/online/live/master 等危险后缀
+const isLikelyProd = dbName === 'rap_beats' || FORBIDDEN_DB_SUFFIXES.some(s => dbName.includes(s));
+if (isLikelyProd) {
+  console.error(`❌ 检测到疑似生产库名 "${dbName}"，拒绝执行！`);
+  console.error('   提示：本地开发库应含 _dev 后缀。');
   process.exit(1);
 }
 

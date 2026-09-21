@@ -9,8 +9,9 @@ const router = Router();
 router.get('/beats/:beatId/comments', async (req, res) => {
   const database = getDatabaseClient();
   const { beatId } = req.params;
-  const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 20;
+  const page = Math.max(1, parseInt(req.query.page as string) || 1);
+  // 上限 100 条，防止一次拉取过多数据
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
   const offset = (page - 1) * limit;
 
   const total = (await database.queryOne<{ count: number }>(

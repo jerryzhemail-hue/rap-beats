@@ -37,9 +37,9 @@ export async function request<T>(url: string, options: RequestOptions = {}): Pro
     } catch {
       // ignore parse error
     }
+    // 只调 logout()（它内部已经 push /login），外层不要再 push 一次
     if (authStore.isAuthenticated) {
       authStore.logout()
-      router.push('/login')
     }
     throw new Error(message)
   }

@@ -47,7 +47,9 @@ watch(
       homepageConfigStore.load()
     } else {
       messagesStore.disconnect()
-      // 登出后重置为游客配置
+      // 登出后重置播放状态 / 未读数 / 页面配置
+      playerStore.reset()
+      notificationsStore.reset()
       homepageConfigStore.reset()
       homepageConfigStore.load()
     }

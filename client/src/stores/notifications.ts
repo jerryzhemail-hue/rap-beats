@@ -196,5 +196,10 @@ export const useNotificationsStore = defineStore('notifications', () => {
     handleIncomingSystemNotification,
     markAllRead,
     markAllSystemRead,
+    /** 登出时重置未读数 */
+    reset() {
+      forumUnreadCount.value = 0
+      systemUnreadCount.value = 0
+    },
   }
 })
