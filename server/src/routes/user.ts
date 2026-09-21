@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import { requireAuth, AuthRequest } from '../middleware/auth.js';
+import { rateLimitMiddleware } from '../middleware/rateLimit.js';
 import { validateUsername, validateEmail, validateNickname, validateBio } from '../utils/validation.js';
 import { getDatabaseClient, getForumDatabaseClient } from '../database/client.js';
 import {
@@ -271,7 +272,8 @@ router.delete('/user/avatar', requireAuth, async (req: AuthRequest, res) => {
 });
 
 // PUT /api/user/password — 修改密码
-router.put('/user/password', requireAuth, async (req: AuthRequest, res) => {
+// 限流 5 次 / 5 分钟（IP 级），防止旧密码暴力枚举
+router.put('/user/password', requireAuth, rateLimitMiddleware('password-change', 5, 5 * 60 * 1000), async (req: AuthRequest, res) => {
   const database = getDatabaseClient();
   const userId = req.user!.id;
   const { oldPassword, newPassword } = req.body;
@@ -288,7 +290,8 @@ router.put('/user/password', requireAuth, async (req: AuthRequest, res) => {
     return res.status(404).json({ error: '用户不存在' });
   }
   if (!bcrypt.compareSync(oldPassword, user.password_hash)) {
-    return res.status(400).json({ error: '旧密码错误' });
+    // 返回通用错误（不区分"用户不存在"和"密码错误"，防用户名枚举）
+    return res.status(400).json({ error: '原密码不正确或验证失败' });
   }
 
   const hash = bcrypt.hashSync(newPassword, 10);

@@ -130,17 +130,41 @@ async function detectViaPython(filePath: string): Promise<BpmDetectionResult | n
     const scriptPath = path.resolve(__dirname, '../scripts/detect_bpm.py');
     const proc = spawn('python3', [scriptPath, filePath, '--json']);
 
-    let stdout = '';
+    // ─── 资源上限保护，防止恶意/畸形文件触发 OOM ───
+    // stdout：bpm 输出通常 < 4KB（JSON），10MB 足够
+    // stderr：异常诊断，1MB 上限
+    const MAX_STDOUT = 10 * 1024 * 1024;
+    const MAX_STDERR = 1 * 1024 * 1024;
+    let stdoutTruncated = false;
     let stderr = '';
-    const timer = setTimeout(() => {
-      proc.kill('SIGKILL');
-      resolve(null);
-    }, PYTHON_TIMEOUT_MS);
 
-    proc.stdout.on('data', (c: Buffer) => { stdout += c.toString(); });
-    proc.stderr.on('data', (c: Buffer) => { stderr += c.toString(); });
+    let stdout = '';
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const killProcess = (reason: string) => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      try { proc.kill('SIGKILL'); } catch {}
+      console.warn(`[BpmDetector] python fallback killed: ${reason}`);
+      resolve(null);
+    };
+
+    timer = setTimeout(() => killProcess(`timeout ${PYTHON_TIMEOUT_MS}ms`), PYTHON_TIMEOUT_MS);
+
+    proc.stdout.on('data', (c: Buffer) => {
+      if (stdoutTruncated) return;
+      if (stdout.length + c.length > MAX_STDOUT) {
+        stdoutTruncated = true;
+        killProcess('stdout exceeded 10MB');
+        return;
+      }
+      stdout += c.toString();
+    });
+    proc.stderr.on('data', (c: Buffer) => {
+      if (stderr.length + c.length > MAX_STDERR) return;
+      stderr += c.toString();
+    });
     proc.on('close', (code) => {
-      clearTimeout(timer);
+      if (timer) { clearTimeout(timer); timer = null; }
       if (code !== 0 || !stdout.trim()) {
         if (stderr.trim()) {
           console.warn(`[BpmDetector] python fallback exited ${code}: ${stderr.trim()}`);
@@ -166,7 +190,7 @@ async function detectViaPython(filePath: string): Promise<BpmDetectionResult | n
       }
     });
     proc.on('error', () => {
-      clearTimeout(timer);
+      if (timer) { clearTimeout(timer); timer = null; }
       resolve(null);
     });
   });

@@ -26,6 +26,43 @@ export async function initDatabase(
   membershipDb: import('./client.js').DatabaseClient,
 ) {
 
+  // ─── 并发迁移锁 ────────────────────────────────────────────────────
+  // 多实例同时启动或运维误触会造成 schema_migrations 被多个进程同时执行，
+  // 导致 ALTER / UPDATE 重复生效引发数据丢失。MySQL 的 GET_LOCK 是 session 级锁，
+  // 第一个拿到的进程执行迁移，其他进程等待；超时则直接跳过（视为已迁移）。
+  const LOCK_NAME = 'rap_beats_schema_init';
+  const LOCK_TIMEOUT_SECONDS = 30;
+  let lockHeld = false;
+  try {
+    const lockResult = await db.queryOne<{ held: number }>(
+      'SELECT GET_LOCK(?, ?) AS held',
+      [LOCK_NAME, LOCK_TIMEOUT_SECONDS]
+    );
+    if (!lockResult || lockResult.held !== 1) {
+      console.warn('[init] 未能在 30s 内拿到 schema 锁，跳过本次初始化（其他进程正在执行）');
+      return;
+    }
+    lockHeld = true;
+  } catch (e: any) {
+    console.warn('[init] GET_LOCK 失败（旧版 MySQL？），继续无锁执行:', e.message);
+  }
+
+  try {
+    await runInit(db, forumDb, membershipDb);
+  } finally {
+    if (lockHeld) {
+      try { await db.execute('SELECT RELEASE_LOCK(?)', [LOCK_NAME]); }
+      catch (e: any) { console.warn('[init] RELEASE_LOCK 失败:', e.message); }
+    }
+  }
+}
+
+async function runInit(
+  db: import('./client.js').DatabaseClient,
+  forumDb: import('./client.js').DatabaseClient,
+  membershipDb: import('./client.js').DatabaseClient,
+) {
+
   // ─── schema 版本迁移 ────────────────────────────────────────────────
   await db.execute(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -658,6 +695,7 @@ export async function initDatabase(
   );
   if (!activeUnique || activeUnique.c === 0) {
     // 清理已有的多条 active：仅保留最大 id 那条
+    // 多进程并发由外层 GET_LOCK('rap_beats_schema_init') 保护，无需额外事务
     await db.execute(`
       UPDATE beat_license_templates SET is_active = 0
       WHERE is_active = 1
@@ -1011,8 +1049,14 @@ export async function initDatabase(
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'admin_notifications' AND COLUMN_NAME = 'data'`
       );
       if ((colCheck?.cnt ?? 0) > 0) {
-        // 旧表有 data 列，需要迁移
-        await db.execute('DROP TABLE admin_notifications');
+        // 旧表有 data 列，需要迁移。
+        // 安全做法：RENAME 备份（保留数据），再 CREATE 新表，由人工决定是否回灌或清理。
+        const backupName = `admin_notifications_backup_${Date.now()}`;
+        await db.execute(`RENAME TABLE admin_notifications TO ${backupName}`);
+        console.warn(
+          `[init] admin_notifications 检测到旧 data 列，已重命名为 ${backupName}，` +
+          '新表将使用 extra_data JSON 列。备份表保留 30 天后由人工清理。'
+        );
         shouldCreate = true;
       }
     }

@@ -10,14 +10,60 @@ import path from 'path';
 
 // 缓存 worker 以提升性能
 let tesseractWorker: Tesseract.Worker | null = null;
+// worker 初始化 Promise（避免并发首次请求创建两个 worker）
+let workerInitPromise: Promise<Tesseract.Worker> | null = null;
+
+/**
+ * 检查 worker 健康状态：tesseract.js worker 进程崩溃后仍持有引用但不再响应。
+ * 用极小图片做健康探针，5 秒超时则判定为坏。
+ */
+async function isWorkerHealthy(worker: Tesseract.Worker | null): Promise<boolean> {
+  if (!worker) return false;
+  try {
+    // 用一个最小 synthetic image 健康探针（1x1 像素 PNG），健康 worker <1s 完成
+    // tesseract.js v7 accept: file path / URL / buffer
+    const probe = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==', 'base64');
+    await Promise.race([
+      worker.recognize(probe),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('health check timeout')), 5000)),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function createFreshWorker(): Promise<Tesseract.Worker> {
+  return Tesseract.createWorker('eng+chi_sim', 1, {
+    logger: () => {}, // 静默日志
+  });
+}
 
 async function getWorker(): Promise<Tesseract.Worker> {
-  if (!tesseractWorker) {
-    tesseractWorker = await Tesseract.createWorker('eng+chi_sim', 1, {
-      logger: () => {}, // 静默日志
-    });
+  // 如果已经有一个健康的 worker，复用
+  if (tesseractWorker && !workerInitPromise) {
+    return tesseractWorker;
   }
-  return tesseractWorker;
+  // 并发请求复用同一个初始化 Promise
+  if (!workerInitPromise) {
+    workerInitPromise = (async () => {
+      // 重建前先验证（如果 worker 已存在但怀疑坏掉）
+      if (tesseractWorker) {
+        const healthy = await isWorkerHealthy(tesseractWorker);
+        if (!healthy) {
+          console.warn('[ImageAnalyzer] worker 健康检查失败，重启');
+          try { await tesseractWorker.terminate(); } catch {}
+          tesseractWorker = null;
+        }
+      }
+      if (!tesseractWorker) {
+        tesseractWorker = await createFreshWorker();
+      }
+      workerInitPromise = null;
+      return tesseractWorker;
+    })();
+  }
+  return workerInitPromise;
 }
 
 export interface ImageAnalysisResult {
