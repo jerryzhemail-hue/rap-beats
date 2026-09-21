@@ -13,6 +13,56 @@ function xunhu() {
   return config().xunhu;
 }
 
+/**
+ * 环境校验:mock 支付仅在 development / test 环境下可用
+ * 防止生产环境误开 MOCK_PAYMENT_ENABLED=true 导致免费刷 VIP
+ */
+function assertMockAllowed() {
+  const env = config().env;
+  if (env !== 'development' && env !== 'test') {
+    throw new Error(
+      `[payment] 模拟支付仅在 development/test 环境下可用，当前环境为 ${env}。` +
+      '请在生产环境关闭 MOCK_PAYMENT_ENABLED 或使用真实虎皮椒支付。'
+    );
+  }
+}
+
+/**
+ * 金额校验:虎皮椒回调的 total_fee 必须与 PRICE_CONFIG 一致
+ * 防止攻击者伪造低价 total_fee 仍开通完整 VIP
+ */
+function assertAmountValid(vipLevel: string, totalFee: string): void {
+  const priceConfig = PRICE_CONFIG[vipLevel];
+  if (!priceConfig) {
+    throw new Error(`[payment] 未知 VIP 等级: ${vipLevel}`);
+  }
+  // 使用精确比较(float 比较可能有精度问题,先用字符串比较快路径)
+  if (priceConfig.amount !== totalFee) {
+    throw new Error(
+      `[payment] 回调金额不匹配: 期望 ${priceConfig.amount}, 实际 ${totalFee}`
+    );
+  }
+}
+
+/**
+ * 虎皮椒回调时间戳校验:5 分钟窗口防重放
+ */
+const CALLBACK_TIMESTAMP_WINDOW_SECONDS = 300;
+
+function assertCallbackTimestamp(timestampStr: string): void {
+  const timestamp = parseInt(timestampStr, 10);
+  if (!Number.isFinite(timestamp)) {
+    throw new Error('[payment] 回调时间戳格式错误');
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - timestamp) > CALLBACK_TIMESTAMP_WINDOW_SECONDS) {
+    throw new Error(
+      `[payment] 回调时间戳过期: ${CALLBACK_TIMESTAMP_WINDOW_SECONDS}s 窗口, ` +
+      `now=${now} ts=${timestamp}`
+    );
+  }
+}
+
 // 价格配置
 const PRICE_CONFIG: Record<string, { amount: string; name: string; days: number }> = {
   basic: { amount: '19.90', name: '基础会员 - 月度', days: 30 },
@@ -97,7 +147,8 @@ router.post('/payment/create-order', requireAuth, async (req: AuthRequest, res: 
     if (!x.mockEnabled) {
       return res.status(503).json({ error: '支付通道暂不可用，请稍后再试' });
     }
-    // 模拟支付：仅在 x.mockEnabled=true 时可用
+    // 模拟支付：仅在 x.mockEnabled=true 时可用，但必须校验环境
+    assertMockAllowed();
     const insert = await database.execute(
       'INSERT INTO orders (user_id, vip_level, amount, stripe_session_id, status) VALUES (?, ?, ?, ?, ?)',
       [req.user!.id, vip_level, parseFloat(priceConfig.amount), tradeOrderId, 'completed']
@@ -223,6 +274,12 @@ router.post('/payment/notify', async (req: Request, res: Response) => {
     return res.status(400).send('sign error');
   }
 
+  // 时间戳校验:防重放攻击
+  if (params.time) {
+    try { assertCallbackTimestamp(params.time); }
+    catch (e: any) { console.error(e.message); return res.status(400).send('timestamp error'); }
+  }
+
   // 验证 appid 归属
   if (params.appid && params.appid !== x.appId) {
     console.error('回调 appid 不匹配:', params.appid, 'expected:', x.appId);
@@ -256,6 +313,16 @@ router.post('/payment/notify', async (req: Request, res: Response) => {
 
       if (order.status === 'completed') {
         throw new Error('ORDER_ALREADY_COMPLETED'); // 跳过本次处理
+      }
+
+      // 金额校验:回调的 total_fee 必须与订单 vip_level 的定价一致
+      // 防止攻击者伪造低价 total_fee 仍开通完整 VIP
+      if (params.total_fee) {
+        try { assertAmountValid(order.vip_level, params.total_fee); }
+        catch (e: any) {
+          console.error(`金额校验失败 tradeOrderId=${tradeOrderId}:`, e.message);
+          throw new Error('AMOUNT_MISMATCH');
+        }
       }
 
       // 叠加 VIP 时长(从 membership.vip_users 读最新过期时间,避免双写不一致)
@@ -328,8 +395,8 @@ router.post('/payment/notify', async (req: Request, res: Response) => {
       }).catch(() => {});
     }
   } catch (err: any) {
-    // ORDER_NOT_FOUND 和 ORDER_ALREADY_COMPLETED 是预期情况，返回 success 避免重复通知
-    if (!['ORDER_NOT_FOUND', 'ORDER_ALREADY_COMPLETED'].includes(err.message)) {
+    // ORDER_NOT_FOUND / ORDER_ALREADY_COMPLETED / AMOUNT_MISMATCH 是预期情况，返回 success 避免重复通知
+    if (!['ORDER_NOT_FOUND', 'ORDER_ALREADY_COMPLETED', 'AMOUNT_MISMATCH'].includes(err.message)) {
       console.error('支付回调处理异常:', err);
     }
   }

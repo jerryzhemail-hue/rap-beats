@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import http from 'node:http';
 import { buildApp } from './app.js';
 import {
   initDatabase,
@@ -151,12 +152,63 @@ async function startServer() {
     res.status(500).json({ error: '服务器内部错误，请稍后再试' });
   });
 
-  app.listen(PORT, () => {
-    console.log(`Rap Beats Server running on http://localhost:${PORT}`);
+  // 端口从环境变量读取，支持 docker -e PORT=8080 映射
+  const PORT = parseInt(process.env.PORT || '3000', 10);
+  if (!Number.isFinite(PORT) || PORT < 1024 || PORT > 65535) {
+    throw new Error(`[startup] PORT=${process.env.PORT} 不在有效范围 1024-65535`);
+  }
+
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Rap Beats Server running on http://0.0.0.0:${PORT}`);
   });
+
+  // ─── 优雅关闭（SIGTERM/SIGINT）───────────────────────────────────
+  // Docker stop / k8s 终止时发送 SIGTERM，守护进程发送 SIGINT
+  // 目的：1) 停止接收新连接 2) 等待现有请求处理完毕 3) 关闭数据库/存储连接池
+  const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+  let isShuttingDown = false;
+
+  async function shutdown(signal: string) {
+    if (isShuttingDown) return; // 防止重复触发
+    isShuttingDown = true;
+    console.log(`\n[${signal}] 收到退出信号，开始优雅关闭（最多 ${SHUTDOWN_TIMEOUT_MS}ms）...`);
+
+    // 1) 停止接收新连接
+    server.close(async () => {
+      console.log('[shutdown] HTTP 服务器已关闭');
+
+      // 2) 关闭三个数据库连接池（MySQL 长连接需要显式 end）
+      const closeAll = async (name: string, closeFn: (() => Promise<void>) | undefined) => {
+        if (!closeFn) return;
+        try {
+          await closeFn();
+          console.log(`[shutdown] ${name} 连接池已关闭`);
+        } catch (e: any) {
+          console.error(`[shutdown] ${name} 关闭时出错:`, e?.message);
+        }
+      };
+
+      await closeAll('主库', getDatabaseClient()?.close);
+      await closeAll('Forum库', getForumDatabaseClient()?.close);
+      await closeAll('Membership库', getMembershipDatabaseClient()?.close);
+
+      console.log('[shutdown] 所有连接已释放，进程退出');
+      process.exit(0);
+    });
+
+    // 3) 超时强制退出（防止数据库卡死导致进程僵住）
+    setTimeout(() => {
+      console.error(`[shutdown] 超时（${SHUTDOWN_TIMEOUT_MS}ms），强制退出`);
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
 }
 
 startServer().catch((error) => {
-  console.error(error);
+  console.error('[startup:failed]', error?.message ?? error);
   process.exit(1);
 });

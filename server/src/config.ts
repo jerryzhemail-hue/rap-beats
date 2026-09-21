@@ -132,6 +132,35 @@ function readEnvOrThrow(key: string, context: string): string {
   return v;
 }
 
+/**
+ * 校验 URL 形如 `https://host[:port][/path]`
+ * - 协议限 https/http
+ * - host 限 ASCII letter/digit/dot/hyphen(不能为 *、不能有 protocol-relative //)
+ * - 禁止 * 作为 origin(CORS credentials 模式下 * 与 credentials 不兼容,且极不安全)
+ *
+ * 用于 CORS origin 校验,防止运维误设 `CLIENT_URL=*` 或 `file://...` 导致跨域窃取
+ */
+const CLIENT_URL_RE = /^https?:\/\/[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*(:[0-9]{1,5})?(\/.*)?$/;
+
+export function isValidClientUrl(url: string): boolean {
+  if (!url || url.length > 2048) return false;
+  if (url === '*') return false; // CORS credentials 模式下禁止
+  // 拒绝 protocol-relative(//evil.com)
+  if (url.startsWith('//')) return false;
+  return CLIENT_URL_RE.test(url);
+}
+
+function readEnvClientUrl(key: string, fallback: string): string {
+  const raw = readEnv(key) ?? fallback;
+  if (!isValidClientUrl(raw)) {
+    throw new Error(
+      `[config] ${key}=${JSON.stringify(raw)} 不是合法 https?://host[:port] 格式。` +
+      '禁止用 * / // / file:// / javascript: 等;否则 CORS 会被绕过。'
+    );
+  }
+  return raw;
+}
+
 function detectEnv(): AppConfig['env'] {
   const raw = (readEnv('NODE_ENV') || 'development').toLowerCase();
   if (raw === 'production' || raw === 'test') return raw;
@@ -300,9 +329,10 @@ export function loadConfig(): AppConfig {
   };
 
   // ── URLs
+  // clientUrl 经 readEnvClientUrl() 校验,不合法的 origin 会在启动时就 fail-fast
   const urls = {
     baseUrl: readEnv('BASE_URL') || 'http://localhost:3000',
-    clientUrl: readEnv('CLIENT_URL') || 'http://localhost:5173',
+    clientUrl: readEnvClientUrl('CLIENT_URL', 'http://localhost:5173'),
   };
 
   // ── Xunhu
