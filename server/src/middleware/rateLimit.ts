@@ -35,13 +35,20 @@ export function createRateLimiter(options: {
   const { windowMs, max, keyGenerator, message = '请求过于频繁，请稍后再试' } = options;
 
   return (req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => {
-    // 本地开发/自动化测试开关：RATE_LIMIT_DISABLED=true 时跳过限流（生产环境不要设置）
+    // 本地开发/自动化测试开关：仅在非生产环境允许 RATE_LIMIT_DISABLED=true
     if (process.env.RATE_LIMIT_DISABLED === 'true') {
-      return next();
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[rateLimit] ⚠️ RATE_LIMIT_DISABLED 在生产环境被强制忽略');
+      } else {
+        return next();
+      }
     }
 
     const key = keyGenerator
       ? keyGenerator(req)
+      // IP 伪造加固：req.ip 在配置了 trust proxy 后是真实客户端 IP（来自反代 X-Forwarded-For）
+      // 注意：必须确保 app.set('trust proxy', ...) 已正确配置（如 trust proxy = 1 或具体 IP/段）
+      // 否则攻击者可通过伪造 X-Forwarded-For 头绕过限流
       : `${req.ip ?? 'unknown'}:${req.path}`;
 
     const now = Date.now();

@@ -382,12 +382,6 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
     const db = getForumDatabaseClient();
     const mainDb = getDatabaseClient();
 
-    // 先扣除抽奖消耗的积分
-    const userPoints = await getTotalPoints(req.user!.id);
-    if (userPoints < lotteryCost) {
-      return res.status(400).json({ error: '积分不足，需要 5 积分才能抽奖' });
-    }
-
     // 每日抽奖次数限制（按积分等级：毛胚/出道 1 次、炸场 2 次、厂牌 3 次、GOAT 5 次）
     const dailyChances = await getDailyLotteryChances(req.user!.id);
     const usedToday = await getTodayLotteryCount(req.user!.id);
@@ -401,12 +395,20 @@ router.post('/forum/lottery', lotteryLimiter, requireAuth, async (req: AuthReque
       });
     }
 
-    await changePoints({
-      userId: req.user!.id,
-      amount: -lotteryCost,
-      reason: 'lottery_cost',
-      description: `抽奖消耗 ${lotteryCost} 积分`,
-    });
+    // 原子扣积分（内含余额校验；并发竞态由 changePoints 的 FOR UPDATE 行锁保护）
+    try {
+      await changePoints({
+        userId: req.user!.id,
+        amount: -lotteryCost,
+        reason: 'lottery_cost',
+        description: `抽奖消耗 ${lotteryCost} 积分`,
+      });
+    } catch (e: any) {
+      if (e?.message === '积分不足') {
+        return res.status(400).json({ error: '积分不足，需要 5 积分才能抽奖' });
+      }
+      throw e;
+    }
     costDeducted = true;
 
     // 根据权重随机抽取奖品（密码学安全随机，避免 Math.random 可被预测）
@@ -521,19 +523,22 @@ router.post('/forum/points/exchange', exchangeLimiter, requireAuth, async (req: 
     const db = getForumDatabaseClient();
     const mainDb = getDatabaseClient();
 
-    // 检查积分是否足够
-    const userPoints = await getTotalPoints(req.user!.id);
-    if (userPoints < config.points) {
-      return res.status(400).json({ error: `积分不足，需要 ${config.points} 积分，当前 ${userPoints} 积分` });
+    // 扣除积分（changePoints 内部 FOR UPDATE 原子完成"余额检查 + 扣减"，
+    // 避免外部预检造成的 TOCTOU 双花风险）
+    try {
+      await changePoints({
+        userId: req.user!.id,
+        amount: -config.points,
+        reason: 'exchange',
+        description: `积分兑换 ${config.duration_days} 天${level === 'basic' ? '基础' : level === 'premium' ? '高级' : '至尊'}会员`,
+      });
+    } catch (e: any) {
+      if (e?.message === '积分不足') {
+        const current = await getTotalPoints(req.user!.id).catch(() => 0);
+        return res.status(400).json({ error: `积分不足，需要 ${config.points} 积分，当前 ${current} 积分` });
+      }
+      throw e;
     }
-
-    // 扣除积分
-    await changePoints({
-      userId: req.user!.id,
-      amount: -config.points,
-      reason: 'exchange',
-      description: `积分兑换 ${config.duration_days} 天${level === 'basic' ? '基础' : level === 'premium' ? '高级' : '至尊'}会员`,
-    });
 
     // 更新 VIP 状态
     const user = await mainDb.queryOne<{ vip_expire_at: string | null; vip_level: string | null }>(
@@ -565,6 +570,18 @@ router.post('/forum/points/exchange', exchangeLimiter, requireAuth, async (req: 
       total_points: newTotalPoints,
     });
   } catch (err: any) {
+    // 跨库失败补偿：积分已扣（membershipDb），但 VIP UPDATE（mainDb）可能失败。
+    // 若 catch 在扣除之后触发，尝试退回积分（即使退回失败也不阻塞错误响应）。
+    if (err?.message !== '积分不足') {
+      changePoints({
+        userId: req.user!.id,
+        amount: POINTS_EXCHANGE_CONFIG[req.body?.level as keyof typeof POINTS_EXCHANGE_CONFIG]?.points || 0,
+        reason: 'deduction',
+        description: 'VIP兑换失败，自动退回积分',
+      }).catch((rollbackErr) => {
+        console.error('[exchange-vip] 积分回退失败，需人工处理:', rollbackErr);
+      });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -597,14 +614,11 @@ router.get('/forum/points/download-permission', requireAuth, async (req: AuthReq
 // POST /api/forum/points/exchange-download — 积分兑换单次下载权限
 router.post('/forum/points/exchange-download', exchangeLimiter, requireAuth, async (req: AuthRequest, res) => {
   try {
-    const totalPoints = await getTotalPoints(req.user!.id);
-    if (totalPoints < DOWNLOAD_EXCHANGE_COST) {
-      return res.status(400).json({ error: `积分不足，需要 ${DOWNLOAD_EXCHANGE_COST} 积分，当前 ${totalPoints} 积分` });
-    }
-
     const db = getMembershipDatabaseClient();
 
-    // 扣除积分
+    // 注意：不要在 changePoints 之外预先检查余额（TOCTOU 双花风险）。
+    // changePoints 内部使用 FOR UPDATE 行锁原子完成"检查余额 + 扣减"。
+    // 若余额不足会抛 '积分不足' 错误，下面统一捕获。
     await changePoints({
       userId: req.user!.id,
       amount: -DOWNLOAD_EXCHANGE_COST,
@@ -627,6 +641,11 @@ router.post('/forum/points/exchange-download', exchangeLimiter, requireAuth, asy
       total_points: newTotalPoints,
     });
   } catch (err: any) {
+    // 余额不足时由 changePoints 内部抛 '积分不足'，返回 400 而非 500
+    if (err?.message === '积分不足') {
+      const current = await getTotalPoints(req.user!.id).catch(() => 0);
+      return res.status(400).json({ error: `积分不足，需要 ${DOWNLOAD_EXCHANGE_COST} 积分，当前 ${current} 积分` });
+    }
     res.status(500).json({ error: err.message });
   }
 });

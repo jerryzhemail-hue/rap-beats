@@ -43,7 +43,17 @@ type point_reason = string; // MySQL ENUM is enforced at the application layer
  */
 export async function changePoints(options: PointChangeOptions): Promise<number> {
   const { userId, amount, reason, description } = options;
+
+  // ── 输入校验（防 amount 注入） ────────────────────────────────────
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+    throw new Error('amount 必须为有限数字');
+  }
   if (amount === 0) return getTotalPoints(userId);
+  // 限制单次变动的上限/下限，防止整数溢出或异常输入
+  const MAX_ABS_AMOUNT = 1_000_000;
+  if (Math.abs(amount) > MAX_ABS_AMOUNT) {
+    throw new Error(`单次积分变动绝对值不能超过 ${MAX_ABS_AMOUNT}`);
+  }
 
   const db = getMembershipDatabaseClient();
 

@@ -787,6 +787,14 @@ router.get('/beats/:id/download', requireAuth, async (req: AuthRequest, res: Res
     vipLevel = 'free';
   }
 
+  // ── VIP 专属内容校验（防普通用户绕过 VIP 才能下载的限制） ────────────────
+  if (beat.is_vip_only && !canAccessVipContent(vipLevel)) {
+    return res.status(403).json({
+      error: '此伴奏为 VIP 专属内容，需要 VIP 会员才能下载',
+      code: 'VIP_ONLY',
+    });
+  }
+
   let usedPointPermission = false;
 
   // 免费用户：尝试使用积分兑换的下载权限
