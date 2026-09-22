@@ -6,7 +6,22 @@ export type VipLevel = 'free' | 'basic' | 'premium' | 'ultimate';
 export const FREE_PREVIEW_DURATION_SECONDS = 40;
 export const FREE_PREVIEW_MAX_BYTES = 960 * 1024;
 export const FREE_PREVIEW_TRACK_LIMIT = 6;
-export const ANONYMOUS_USER_ID = 4; // 匿名用户 ID，用于未登录用户试听记录
+
+// ── 匿名用户 ID 配置化 ────────────────────────────────────────────────
+// 通过环境变量 ANONYMOUS_USER_ID 配置，启动时读取一次。默认 4（兼容历史库）。
+// 不同环境（开发/测试/生产）的匿名用户 ID 可能不同（如测试库用 id=100），
+// 集中此处便于运维修改。
+function parseAnonymousUserId(): number {
+  const raw = process.env['ANONYMOUS_USER_ID'];
+  if (!raw) return 4;
+  const n = parseInt(raw, 10);
+  if (!Number.isInteger(n) || n <= 0) {
+    console.warn(`[vip] 无效的 ANONYMOUS_USER_ID="${raw}"，回退默认 4`);
+    return 4;
+  }
+  return n;
+}
+export const ANONYMOUS_USER_ID: number = parseAnonymousUserId();
 
 // 懒加载缓存：启动时为 null，首次访问时校验并存入，若校验失败则后续所有匿名试听操作静默跳过
 let _anonymousUserId: number | null = null;
@@ -27,6 +42,7 @@ async function resolveAnonymousUserId(): Promise<number | null> {
 // 推荐使用 Redis 等共享缓存替代进程内 Map，实现跨进程实时失效。
 const VIP_CACHE_ENABLED = process.env.VIP_CACHE_ENABLED !== 'false';
 const VIP_CACHE_TTL_MS = 60 * 1000; // 60s，多实例部署时可缩短此值
+const VIP_CACHE_MAX_SIZE = 10_000;   // 容量上限，防止恶意耗尽进程内存
 
 type VipCacheEntry = {
   level: VipLevel;
@@ -42,6 +58,20 @@ function evictExpiredCache(userId: number, now: number): void {
   }
 }
 
+/** 容量保护：Map 超过上限时驱逐最旧的过期条目（最懒的 LRU 近似） */
+function evictIfFull(): void {
+  if (vipCache.size < VIP_CACHE_MAX_SIZE) return;
+  let oldestKey: number | null = null;
+  let oldestExpiry = Infinity;
+  for (const [key, entry] of vipCache) {
+    if (entry.expiresAt < oldestExpiry) {
+      oldestExpiry = entry.expiresAt;
+      oldestKey = key;
+    }
+  }
+  if (oldestKey !== null) vipCache.delete(oldestKey);
+}
+
 function getCachedVipLevel(userId: number): VipLevel | null {
   if (!VIP_CACHE_ENABLED) return null;
   const now = Date.now();
@@ -52,6 +82,7 @@ function getCachedVipLevel(userId: number): VipLevel | null {
 
 function setCachedVipLevel(userId: number, level: VipLevel): void {
   if (!VIP_CACHE_ENABLED) return;
+  evictIfFull(); // 容量保护：超限后驱逐最旧的过期条目
   vipCache.set(userId, {
     level,
     expiresAt: Date.now() + VIP_CACHE_TTL_MS
