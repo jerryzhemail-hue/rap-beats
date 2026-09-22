@@ -1131,6 +1131,22 @@ async function initMembershipDatabase(membershipDb: import('./client.js').Databa
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
+  // ── P1 安全加固：sign_in_milestone / sign_in / lottery 等幂等流水唯一索引 ──
+  // 防止"先 SELECT 查存在 → 后 INSERT 写入"之间的 TOCTOU 竞态双发。
+  // 使用 IF NOT EXISTS 模式，先尝试 ADD UNIQUE，捕获重复键错误后忽略。
+  // 这里只能写可重入的 SQL：MySQL 没有 ADD INDEX IF NOT EXISTS，所以用 try/catch。
+  try {
+    await membershipDb.execute(`
+      ALTER TABLE point_transactions
+      ADD UNIQUE KEY uniq_user_reason_date (user_id, reason, created_at)
+    `);
+  } catch (err: any) {
+    // 已存在（ER_DUP_KEYNAME = 1061）属于正常状态，静默忽略
+    if (err?.errno !== 1061 && err?.code !== 'ER_DUP_KEYNAME') {
+      throw err;
+    }
+  }
+
   // 积分兑换下载权限表(从 forum_point_download_permissions 迁移而来)
   await membershipDb.execute(`
     CREATE TABLE IF NOT EXISTS point_download_permissions (

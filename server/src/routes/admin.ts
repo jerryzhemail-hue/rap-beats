@@ -639,11 +639,19 @@ router.get('/admin/license-agreements/export', requireAdmin, async (req: AuthReq
 // POST /api/admin/cleanup-missing-beats — 临时端点：清理本地文件缺失的 beats
 router.post('/admin/cleanup-missing-beats', requireAdmin, async (req: AuthRequest, res) => {
   const database = getDatabaseClient();
-  const ids: number[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
-  if (ids.length === 0) {
+  // ── 类型加固：ids 必须是正整数数组 ────────────────────────────────
+  const rawIds = req.body?.ids;
+  if (!Array.isArray(rawIds) || rawIds.length === 0) {
     return res.status(400).json({ error: 'ids 不能为空' });
   }
+  const ids: number[] = rawIds
+    .map((v: unknown) => Number(v))
+    .filter((n: number) => Number.isInteger(n) && n > 0 && n <= 2_147_483_647);
+  if (ids.length === 0) {
+    return res.status(400).json({ error: 'ids 必须为正整数数组' });
+  }
 
+  // placeholders 全部由硬编码 '?' 拼接而成，无用户输入进入 SQL 骨架
   const placeholders = ids.map(() => '?').join(',');
 
   try {

@@ -44,19 +44,26 @@ const SIGN_IN_CONFIG = {
 } as const;
 
 // 检查并发放里程碑奖励
+// 防 TOCTOU 双发：依赖 point_transactions 表的 (user_id, reason, created_at) 唯一索引
+// 先写一条"幂等令牌"流水（INSERT IGNORE），若 affectedRows=1 表示首次领取，
+// 若 =0 表示今日已领取（来自并发请求或重复签到），跳过发奖。
 async function checkAndGrantMilestone(db: ReturnType<typeof getForumDatabaseClient>, userId: number, consecutiveDays: number): Promise<{ milestone: number; points: number } | null> {
   for (const [days, points] of Object.entries(SIGN_MILESTONES)) {
     const milestone = parseInt(days);
     if (consecutiveDays === milestone) {
-      // 使用本地时区的今天（与签到表一致）
-      const todayLocal = getLocalDateString();
-      // milestone 写在 point_transactions(积分流水表),已迁移到 membershipDb
       const membershipDb = getMembershipDatabaseClient();
-      const existing = await membershipDb.queryOne<{ id: number }>(
-        'SELECT id FROM point_transactions WHERE user_id = ? AND reason = ? AND DATE(created_at) = ?',
-        [userId, 'sign_in_milestone', todayLocal]
-      );
-      if (!existing) {
+      const todayLocal = getLocalDateString();
+      // 用今天 00:00:00 作为 created_at，确保 (user_id, reason, created_at) 唯一索引命中
+      const claimTimestamp = `${todayLocal} 00:00:00`;
+      // INSERT IGNORE：依赖幂等唯一索引保证原子性（不存在→插入，存在→忽略）
+      const result = (await membershipDb.execute(
+        `INSERT IGNORE INTO point_transactions (user_id, \`change\`, reason, description, created_at)
+         VALUES (?, 0, 'sign_in_milestone_claim', ?, ?)`,
+        [userId, `sign_in_milestone claim for day ${milestone}`, claimTimestamp]
+      )) as { affectedRows?: number };
+
+      if ((result.affectedRows ?? 0) === 1) {
+        // 首次领取：发放积分
         await changePoints({
           userId,
           amount: points,
@@ -65,6 +72,8 @@ async function checkAndGrantMilestone(db: ReturnType<typeof getForumDatabaseClie
         });
         return { milestone, points };
       }
+      // 已领取过（含并发），跳过
+      return null;
     }
   }
   return null;
