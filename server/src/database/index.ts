@@ -242,6 +242,30 @@ async function runInit(
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
+  // ── 管理员操作审计日志表 ─────────────────────────────────────────────
+  // 记录所有高危管理员操作的完整上下文，用于安全合规审计与溯源。
+  // 只记录操作结果（成功/失败），不记录敏感数据（如密码哈希、完整请求体）。
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      admin_id INT NOT NULL COMMENT '执行操作的管理员用户 ID',
+      admin_username VARCHAR(50) NOT NULL COMMENT '管理员用户名（快照，保留操作时的上下文）',
+      action VARCHAR(100) NOT NULL COMMENT '操作类型，如 user_role_change、beat_delete',
+      target_type VARCHAR(50) NOT NULL COMMENT '目标资源类型，如 user、beat、license_template',
+      target_id VARCHAR(100) NOT NULL COMMENT '目标资源 ID（字符串兼容 uuid/复合键）',
+      target_label VARCHAR(255) NULL COMMENT '目标资源的可读标识，如用户名/beat标题',
+      detail JSON NULL COMMENT '操作详情（不含密码/哈希等敏感字段）',
+      ip_address VARCHAR(45) NULL COMMENT '管理员 IP（IPv6 兼容）',
+      user_agent VARCHAR(500) NULL COMMENT '管理员浏览器 UA',
+      result ENUM('success','failure') NOT NULL DEFAULT 'success',
+      result_message VARCHAR(500) NULL COMMENT '失败原因',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_admin_id (admin_id),
+      INDEX idx_target (target_type, target_id),
+      INDEX idx_created_at (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   // Beatmaker 申请表
   await db.execute(`
     CREATE TABLE IF NOT EXISTS beatmaker_applications (

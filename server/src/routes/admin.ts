@@ -8,6 +8,7 @@ import { invalidateVipCache } from '../middleware/vip.js';
 import { detectBpmFromUrl, detectBpmFromFile } from '../services/bpmDetector.js';
 import { isRemoteStorageEnabled } from '../services/storage.js';
 import { toDateTimeString } from '../utils/timezone.js';
+import { logAdminAction } from '../services/adminAuditLog.js';
 
 const router = Router();
 
@@ -160,10 +161,36 @@ router.put('/admin/users/:id/role', requireAdmin, async (req: AuthRequest, res) 
 
   // 不能修改自己的角色
   if (parseInt(id as string) === req.user!.id) {
+    logAdminAction({
+      adminId: req.user!.id,
+      adminUsername: req.user!.username,
+      action: 'user_role_change',
+      targetType: 'user',
+      targetId: String(id),
+      detail: { newRole: role, reason: 'self_modification_attempt' },
+      request: req,
+      result: 'failure',
+      resultMessage: '不能修改自己的角色',
+    }).catch(() => {});
     return res.status(400).json({ error: '不能修改自己的角色' });
   }
 
+  // 查询旧角色（用于审计）
+  const oldUser = await database.queryOne<{ role: string; username: string }>(
+    'SELECT role, username FROM users WHERE id = ?', [id]
+  );
+
   await database.execute('UPDATE users SET role = ? WHERE id = ?', [role, id]);
+  await logAdminAction({
+    adminId: req.user!.id,
+    adminUsername: req.user!.username,
+    action: 'user_role_change',
+    targetType: 'user',
+    targetId: String(id),
+    targetLabel: oldUser?.username,
+    detail: { newRole: role, oldRole: oldUser?.role ?? null },
+    request: req,
+  });
   res.json({ message: '角色修改成功' });
 });
 
@@ -182,12 +209,43 @@ router.put('/admin/users/:id/vip', requireAdmin, async (req: AuthRequest, res) =
   const targetUser = await database.queryOne<{ id: number; role: string }>('SELECT id, role FROM users WHERE id = ?', [userIdRaw]);
   if (!targetUser) return res.status(404).json({ error: '用户不存在' });
 
+  // 不能修改自己的 VIP 状态
+  if (parseInt(id as string) === req.user!.id) {
+    await logAdminAction({
+      adminId: req.user!.id,
+      adminUsername: req.user!.username,
+      action: 'user_vip_change',
+      targetType: 'user',
+      targetId: String(id),
+      detail: { reason: 'self_modification_attempt' },
+      request: req,
+      result: 'failure',
+      resultMessage: '不能修改自己的 VIP 状态',
+    }).catch(() => {});
+    return res.status(400).json({ error: '不能修改自己的 VIP 状态' });
+  }
+
+  const oldVip = await database.queryOne<{ vip_level: string; username: string }>(
+    'SELECT vip_level, username FROM users WHERE id = ?', [userIdRaw]
+  );
+
   if (targetUser.role === 'admin') {
     await database.execute("UPDATE users SET vip_level = 'ultimate', vip_expire_at = NULL WHERE id = ?", [userIdRaw]);
     invalidateVipCache(userId);
+    await logAdminAction({
+      adminId: req.user!.id,
+      adminUsername: req.user!.username,
+      action: 'user_vip_change',
+      targetType: 'user',
+      targetId: String(userId),
+      targetLabel: oldVip?.username,
+      detail: { newVipLevel: 'ultimate', oldVipLevel: oldVip?.vip_level ?? null, note: 'admin_auto_ultimate' },
+      request: req,
+    });
     return res.json({ message: '管理员账号默认拥有永久至尊会员' });
   }
 
+  let newExpireAt: Date | null = null;
   if (vip_level === 'free') {
     await database.execute("UPDATE users SET vip_level = 'free', vip_expire_at = NULL WHERE id = ?", [userIdRaw]);
     invalidateVipCache(userId);
@@ -205,6 +263,7 @@ router.put('/admin/users/:id/vip', requireAdmin, async (req: AuthRequest, res) =
       expireBase = now;
     }
     expireBase.setDate(expireBase.getDate() + (days || 30));
+    newExpireAt = expireBase;
     await database.execute('UPDATE users SET vip_level = ?, vip_expire_at = ? WHERE id = ?', [
       vip_level,
       toDateTimeString(expireBase),
@@ -212,6 +271,22 @@ router.put('/admin/users/:id/vip', requireAdmin, async (req: AuthRequest, res) =
     ]);
     invalidateVipCache(userId);
   }
+
+  await logAdminAction({
+    adminId: req.user!.id,
+    adminUsername: req.user!.username,
+    action: 'user_vip_change',
+    targetType: 'user',
+    targetId: String(userId),
+    targetLabel: oldVip?.username,
+    detail: {
+      newVipLevel: vip_level,
+      oldVipLevel: oldVip?.vip_level ?? null,
+      days: vip_level === 'free' ? 0 : (days || 30),
+      newExpireAt: newExpireAt ? toDateTimeString(newExpireAt) : null,
+    },
+    request: req,
+  });
 
   const levelNames: Record<string, string> = { free: '免费', basic: '基础', premium: '高级', ultimate: '至尊' };
   res.json({ message: `已设为${levelNames[vip_level]}会员${vip_level !== 'free' ? `（${days || 30}天）` : ''}` });
@@ -224,11 +299,22 @@ router.delete('/admin/users/:id', requireAdmin, async (req: AuthRequest, res) =>
 
   // 不能删除自己
   if (parseInt(id as string) === req.user!.id) {
+    await logAdminAction({
+      adminId: req.user!.id,
+      adminUsername: req.user!.username,
+      action: 'user_delete',
+      targetType: 'user',
+      targetId: String(id),
+      detail: { reason: 'self_deletion_attempt' },
+      request: req,
+      result: 'failure',
+      resultMessage: '不能删除自己',
+    }).catch(() => {});
     return res.status(400).json({ error: '不能删除自己' });
   }
 
-  const user = await database.queryOne<{ id: number; avatar_url: string | null }>(
-    'SELECT id, avatar_url FROM users WHERE id = ?',
+  const user = await database.queryOne<{ id: number; username: string; avatar_url: string | null }>(
+    'SELECT id, username, avatar_url FROM users WHERE id = ?',
     [id]
   );
   if (!user) return res.status(404).json({ error: '用户不存在' });
@@ -263,6 +349,17 @@ router.delete('/admin/users/:id', requireAdmin, async (req: AuthRequest, res) =>
   await membershipDb.execute('DELETE FROM point_download_permissions WHERE user_id = ?', [id]);
   await forumDb.execute('DELETE FROM forum_comment_likes WHERE user_id = ?', [id]);
   await deleteStoredAsset('avatar', user.avatar_url);
+
+  await logAdminAction({
+    adminId: req.user!.id,
+    adminUsername: req.user!.username,
+    action: 'user_delete',
+    targetType: 'user',
+    targetId: String(id),
+    targetLabel: user.username,
+    detail: { username: user.username, cleanupScope: 'all' },
+    request: req,
+  });
 
   res.json({ message: '用户已删除' });
 });
@@ -351,6 +448,21 @@ router.post('/admin/maintenance/clear-test-users', requireAdmin, async (_req: Au
   }
 
   const remainingUsers = (await database.queryOne<{ count: number }>('SELECT COUNT(*) as count FROM users'))?.count ?? 0;
+
+  await logAdminAction({
+    adminId: _req.user!.id,
+    adminUsername: _req.user!.username,
+    action: 'maintenance_clear_test_users',
+    targetType: 'system',
+    targetId: 'all_test_users',
+    detail: {
+      clearedUserCount: userAssets.length,
+      remainingUsers,
+      operation: 'clear_all_non_admin_users',
+    },
+    request: _req,
+  });
+
   res.json({ message: '已清空除 admin 外的所有账号', remainingUsers });
 });
 
@@ -375,6 +487,16 @@ router.post('/admin/maintenance/clear-demo-beats', requireAdmin, async (_req: Au
     await deleteStoredAsset('audio', beat.file_path);
     await deleteStoredAsset('cover', beat.cover_image);
   }
+
+  await logAdminAction({
+    adminId: _req.user!.id,
+    adminUsername: _req.user!.username,
+    action: 'maintenance_clear_demo_beats',
+    targetType: 'system',
+    targetId: 'all_beats',
+    detail: { removedBeats: beats.length },
+    request: _req,
+  });
 
   res.json({ message: '已清空全部伴奏数据', removedBeats: beats.length });
 });
@@ -412,6 +534,22 @@ router.post('/admin/beats/:id/detect-bpm', requireAdmin, async (req: AuthRequest
     [result.bpm, Math.round(result.duration_seconds), result.key || '', beat.id]
   );
 
+  await logAdminAction({
+    adminId: req.user!.id,
+    adminUsername: req.user!.username,
+    action: 'beat_detect_bpm',
+    targetType: 'beat',
+    targetId: String(beat.id),
+    targetLabel: beat.title,
+    detail: {
+      newBpm: result.bpm,
+      newDuration: Math.round(result.duration_seconds),
+      newKey: result.key || null,
+      confidence: result.confidence,
+    },
+    request: req,
+  });
+
   res.json({
     message: 'BPM 识别成功',
     beat_id: beat.id,
@@ -444,11 +582,21 @@ router.put('/admin/license-templates/:id', requireAdmin, async (req: AuthRequest
     is_active?: number;
   };
 
-  const template = await database.queryOne<{ id: number }>(
-    'SELECT id FROM beat_license_templates WHERE id = ?',
+  const oldTemplate = await database.queryOne<{ id: number; version: string; is_active: number }>(
+    'SELECT id, version, is_active FROM beat_license_templates WHERE id = ?',
     [req.params.id]
   );
-  if (!template) {
+  if (!oldTemplate) {
+    await logAdminAction({
+      adminId: req.user!.id,
+      adminUsername: req.user!.username,
+      action: 'license_template_update',
+      targetType: 'license_template',
+      targetId: String(req.params.id),
+      result: 'failure',
+      resultMessage: '模板不存在',
+      request: req,
+    }).catch(() => {});
     res.status(404).json({ error: '模板不存在' });
     return;
   }
@@ -464,6 +612,17 @@ router.put('/admin/license-templates/:id', requireAdmin, async (req: AuthRequest
     );
   } catch (err: any) {
     if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+      await logAdminAction({
+        adminId: req.user!.id,
+        adminUsername: req.user!.username,
+        action: 'license_template_update',
+        targetType: 'license_template',
+        targetId: String(req.params.id),
+        detail: { reason: 'multiple_active_violation' },
+        request: req,
+        result: 'failure',
+        resultMessage: '仅允许存在 1 个启用的协议模板',
+      }).catch(() => {});
       return res.status(409).json({ error: '仅允许存在 1 个启用的协议模板，请先停用其他模板后再执行此操作' });
     }
     throw err;
@@ -473,6 +632,23 @@ router.put('/admin/license-templates/:id', requireAdmin, async (req: AuthRequest
     'SELECT id, version, content, is_active, created_at, updated_at FROM beat_license_templates WHERE id = ?',
     [req.params.id]
   );
+
+  await logAdminAction({
+    adminId: req.user!.id,
+    adminUsername: req.user!.username,
+    action: 'license_template_update',
+    targetType: 'license_template',
+    targetId: String(req.params.id),
+    detail: {
+      newVersion: version ?? null,
+      oldVersion: oldTemplate.version,
+      newActive: is_active ?? null,
+      oldActive: oldTemplate.is_active,
+      contentChanged: content !== undefined,
+    },
+    request: req,
+  });
+
   res.json({ template: updated });
 });
 
@@ -496,30 +672,73 @@ router.post('/admin/license-templates', requireAdmin, async (req: AuthRequest, r
     );
   } catch (err: any) {
     if (err?.code === 'ER_DUP_ENTRY' || Number(err?.errno) === 1062) {
+      await logAdminAction({
+        adminId: req.user!.id,
+        adminUsername: req.user!.username,
+        action: 'license_template_create',
+        targetType: 'license_template',
+        targetId: 'unknown',
+        detail: { version, is_active, reason: 'multiple_active_violation' },
+        request: req,
+        result: 'failure',
+        resultMessage: '仅允许存在 1 个启用的协议模板',
+      }).catch(() => {});
       return res.status(409).json({ error: '仅允许存在 1 个启用的协议模板，请先停用其他模板后再执行此操作' });
     }
     throw err;
   }
 
-  const template = await database.queryOne(
+  const template = await database.queryOne<{ id: number; version: string; is_active: number; created_at: string; updated_at: string }>(
     'SELECT id, version, content, is_active, created_at, updated_at FROM beat_license_templates WHERE id = LAST_INSERT_ID()'
   );
+
+  await logAdminAction({
+    adminId: req.user!.id,
+    adminUsername: req.user!.username,
+    action: 'license_template_create',
+    targetType: 'license_template',
+    targetId: String(template?.id ?? 'unknown'),
+    detail: { version: template?.version, is_active: template?.is_active },
+    request: req,
+  });
+
   res.status(201).json({ template });
 });
 
 // DELETE /api/admin/license-templates/:id — 删除协议模板
 router.delete('/admin/license-templates/:id', requireAdmin, async (req: AuthRequest, res) => {
   const database = getDatabaseClient();
-  const template = await database.queryOne<{ id: number }>(
-    'SELECT id FROM beat_license_templates WHERE id = ?',
+  const template = await database.queryOne<{ id: number; version: string; is_active: number }>(
+    'SELECT id, version, is_active FROM beat_license_templates WHERE id = ?',
     [req.params.id]
   );
   if (!template) {
+    await logAdminAction({
+      adminId: req.user!.id,
+      adminUsername: req.user!.username,
+      action: 'license_template_delete',
+      targetType: 'license_template',
+      targetId: String(req.params.id),
+      result: 'failure',
+      resultMessage: '模板不存在',
+      request: req,
+    }).catch(() => {});
     res.status(404).json({ error: '模板不存在' });
     return;
   }
 
   await database.execute('DELETE FROM beat_license_templates WHERE id = ?', [req.params.id]);
+
+  await logAdminAction({
+    adminId: req.user!.id,
+    adminUsername: req.user!.username,
+    action: 'license_template_delete',
+    targetType: 'license_template',
+    targetId: String(req.params.id),
+    detail: { version: template.version, wasActive: !!template.is_active },
+    request: req,
+  });
+
   res.json({ message: '删除成功' });
 });
 
@@ -676,6 +895,22 @@ router.post('/admin/cleanup-missing-beats', requireAdmin, async (req: AuthReques
 
     await database.execute('COMMIT');
 
+    // 记录审计日志
+    await logAdminAction({
+      adminId: req.user!.id,
+      adminUsername: req.user!.username,
+      action: 'beat_cleanup_missing',
+      targetType: 'beat',
+      targetId: ids.join(','),
+      detail: {
+        deletedBeats: beatRows.count,
+        deletedLicenses: licRows.count,
+        remainingBeats: afterTotal.count,
+        beatIds: ids,
+      },
+      request: req,
+    });
+
     return res.json({
       ok: true,
       deleted_beats: beatRows.count,
@@ -684,6 +919,17 @@ router.post('/admin/cleanup-missing-beats', requireAdmin, async (req: AuthReques
     });
   } catch (err: any) {
     try { await database.execute('ROLLBACK'); } catch {}
+    await logAdminAction({
+      adminId: req.user!.id,
+      adminUsername: req.user!.username,
+      action: 'beat_cleanup_missing',
+      targetType: 'beat',
+      targetId: ids.join(','),
+      detail: { reason: 'transaction_failure' },
+      request: req,
+      result: 'failure',
+      resultMessage: err?.message || 'delete failed',
+    }).catch(() => {});
     return res.status(500).json({ error: err?.message || 'delete failed' });
   }
 });
